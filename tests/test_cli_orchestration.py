@@ -155,8 +155,8 @@ def test_start_interactive_first_run_with_fakes_configures_channel_and_models(tm
     class FakeInquirer:
         def text(self, *, message, default=None):
             values = {
-                "Telegram api_id:": "12345",
-                "Telegram phone number:": "+15550000000",
+                "Telegram api_id (digits only):": "12345",
+                "Telegram phone number (international format, e.g. +15551234567):": "+15550000000",
                 "Filter channels/groups by title (optional):": "python",
                 "How many recent messages?": "25",
             }
@@ -252,7 +252,7 @@ def test_start_can_reenter_saved_telegram_credentials_before_login(tmp_path, mon
 
         def text(self, *, message, default=None):
             values = {
-                "Telegram api_id:": "222",
+                "Telegram api_id (digits only):": "222",
                 "Telegram phone number (international format, e.g. +15551234567):": "+15551234567",
                 "Filter channels/groups by title (optional):": "",
                 "How many recent messages?": "10",

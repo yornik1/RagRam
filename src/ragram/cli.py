@@ -128,6 +128,10 @@ def _reset_telegram_credentials(config: Any, paths: Any) -> None:
     config.telegram.phone = None
 
 
+def _valid_phone_number(value: str) -> bool:
+    return value.startswith("+") and value[1:].isdigit() and 8 <= len(value[1:]) <= 15
+
+
 async def _disconnect_if_supported(client: Any) -> None:
     disconnect = getattr(client, "disconnect", None)
     if disconnect is None:
@@ -160,39 +164,70 @@ async def _run_interactive_start(config, paths) -> None:
 
     if not _telegram_config_complete(config):
         _print_telegram_credentials_help()
-        api_id = await _prompt_value(inquirer.text(message="Telegram api_id:"))
-        api_hash = await _prompt_value(inquirer.secret(message="Telegram api_hash:"))
-        phone = await _prompt_value(inquirer.text(message="Telegram phone number (international format, e.g. +15551234567):"))
-        config.telegram.api_id = int(str(api_id).strip())
-        config.telegram.api_hash = str(api_hash).strip()
-        config.telegram.phone = str(phone).strip()
+        while True:
+            api_id = str(await _prompt_value(inquirer.text(message="Telegram api_id (digits only):"))).strip()
+            if api_id.isdigit() and int(api_id) > 0:
+                break
+            console.print("[red]api_id must be a positive number from https://my.telegram.org/apps.[/red]")
+        while True:
+            api_hash = str(await _prompt_value(inquirer.secret(message="Telegram api_hash:"))).strip()
+            if api_hash:
+                break
+            console.print("[red]api_hash cannot be empty. Copy App api_hash from https://my.telegram.org/apps.[/red]")
+        while True:
+            phone = str(
+                await _prompt_value(inquirer.text(message="Telegram phone number (international format, e.g. +15551234567):"))
+            ).strip()
+            if _valid_phone_number(phone):
+                break
+            console.print("[red]Phone must use international format: + followed by digits only, e.g. +15551234567.[/red]")
+        config.telegram.api_id = int(api_id)
+        config.telegram.api_hash = api_hash
+        config.telegram.phone = phone
         save_config(config, paths.config_path)
 
     client = create_telegram_client(config.telegram, paths)
     selected: TelegramDialog | None = None
     try:
         async def ask_login_code() -> str:
-            console.print(
-                "Telegram sent a login code to your Telegram app/session for this phone number "
-                "(usually the official 'Telegram' chat or a login notification), not to this terminal."
-            )
-            console.print("If it does not arrive, type 'r' to resend or 'q' to quit and re-check the phone number.")
-            value = str(
-                await _prompt_value(
-                    inquirer.text(
-                        message="Telegram login code (or r=resend, q=quit):",
-                    )
+            while True:
+                console.print(
+                    "Telegram sent a login code to your Telegram app/session for this phone number "
+                    "(usually the official 'Telegram' chat or a login notification), not to this terminal."
                 )
-            ).strip()
-            if value.casefold() in {"r", "resend"}:
-                console.print("Requesting a new Telegram login code...")
-                raise TelegramLoginCodeResendRequested()
-            if value.casefold() in {"q", "quit", "exit"}:
-                raise typer.Exit(1)
-            return value
+                console.print("If it does not arrive, type 'r' to try resend or 'q' to quit and re-check the phone number.")
+                value = str(
+                    await _prompt_value(
+                        inquirer.text(
+                            message="Telegram login code (or r=try resend, q=quit):",
+                        )
+                    )
+                ).strip()
+                if value.casefold() in {"r", "resend"}:
+                    console.print("Requesting a new Telegram login code...")
+                    raise TelegramLoginCodeResendRequested()
+                if value.casefold() in {"q", "quit", "exit"}:
+                    raise typer.Exit(1)
+                if value:
+                    return value
+                console.print("[red]Enter the Telegram login code, or type r to retry / q to quit.[/red]")
 
         async def ask_2fa_password() -> str:
             return str(await _prompt_value(inquirer.secret(message="Telegram 2FA password:")))
+
+        def show_code_delivery(delivery) -> None:
+            console.print(
+                f"Telegram accepted {delivery.operation.replace('_', ' ')}. "
+                f"Delivery method: {delivery.delivery_method}."
+            )
+            if delivery.code_length:
+                console.print(f"Expected code length: {delivery.code_length} digits.")
+            if delivery.timeout_seconds is not None:
+                console.print(f"Telegram resend/change-method timeout: {delivery.timeout_seconds} seconds.")
+            if delivery.next_method:
+                console.print(f"Next delivery method Telegram may allow: {delivery.next_method}.")
+            else:
+                console.print("Telegram did not advertise another delivery method yet; immediate resend may be refused.")
 
         try:
             login = await ensure_telegram_login(
@@ -200,6 +235,7 @@ async def _run_interactive_start(config, paths) -> None:
                 phone=config.telegram.phone or "",
                 code_callback=ask_login_code,
                 password_callback=ask_2fa_password,
+                code_sent_callback=show_code_delivery,
             )
         except TelegramLoginCodeInvalid as exc:
             console.print(f"[red]{exc}[/red]")

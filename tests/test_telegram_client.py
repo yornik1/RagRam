@@ -12,6 +12,7 @@ from ragram.telegram_client import (
     TelegramLoginCodeResendRequested,
     TelegramDialog,
     TelegramFloodWait,
+    describe_login_code_delivery,
     ensure_telegram_login,
     filter_dialogs,
     list_accessible_dialogs,
@@ -32,6 +33,11 @@ class FakeFloodWaitError(Exception):
     def __init__(self, seconds: int):
         super().__init__(f"wait {seconds}")
         self.seconds = seconds
+
+
+class FakeSentCodeTypeApp:
+    def __init__(self, length: int):
+        self.length = length
 
 
 class FakeClient:
@@ -72,7 +78,11 @@ class FakeClient:
             error = self.send_code_errors.pop(0)
             if error is not None:
                 raise error
-        return type("SentCode", (), {"phone_code_hash": "hash-123"})()
+        return type(
+            "SentCode",
+            (),
+            {"phone_code_hash": "hash-123", "type": FakeSentCodeTypeApp(5), "next_type": None, "timeout": None},
+        )()
 
     async def sign_in(self, **kwargs):
         self.sign_in_calls.append(kwargs)
@@ -205,6 +215,7 @@ def test_login_can_resend_code_before_sign_in():
     async def scenario():
         client = FakeClient()
         values = iter([TelegramLoginCodeResendRequested(), "22222"])
+        deliveries = []
 
         def code_callback():
             value = next(values)
@@ -217,19 +228,30 @@ def test_login_can_resend_code_before_sign_in():
             phone="+15550000000",
             code_callback=code_callback,
             password_callback=lambda: "secret",
+            code_sent_callback=deliveries.append,
             code_invalid_error_types=(FakePhoneCodeInvalidError,),
         )
 
         assert result.reused_session is False
         assert client.send_code_calls == ["+15550000000", "+15550000000"]
         assert [call["code"] for call in client.sign_in_calls] == ["22222"]
+        assert [delivery.operation for delivery in deliveries] == ["send_login_code", "resend_login_code"]
+        assert deliveries[0].delivery_method == "FakeSentCodeTypeApp"
 
     asyncio.run(scenario())
 
 
 def test_login_resend_failure_is_domain_error_without_raw_resend_exception():
     async def scenario():
-        client = FakeClient(send_code_errors=[None, RuntimeError("provider rejected resend")])
+        client = FakeClient(
+            send_code_errors=[
+                None,
+                RuntimeError(
+                    "Returned when all available options for this type of number were already used "
+                    "(caused by ResendCodeRequest)"
+                ),
+            ]
+        )
 
         with pytest.raises(TelegramLoginCodeRequestFailed) as raised:
             await ensure_telegram_login(
@@ -240,10 +262,32 @@ def test_login_resend_failure_is_domain_error_without_raw_resend_exception():
                 code_invalid_error_types=(FakePhoneCodeInvalidError,),
             )
 
-        assert "resend login code" in str(raised.value)
+        assert "refused to send another code right now" in str(raised.value)
+        assert "all available options" not in str(raised.value).casefold()
         assert client.send_code_calls == ["+15550000000", "+15550000000"]
 
     asyncio.run(scenario())
+
+
+def test_describe_login_code_delivery_maps_safe_telegram_metadata():
+    sent_code_type_app = type("SentCodeTypeApp", (), {"length": 5})
+    code_type_sms = type("CodeTypeSms", (), {})
+    sent_code = type(
+        "SentCode",
+        (),
+        {
+            "type": sent_code_type_app(),
+            "next_type": code_type_sms(),
+            "timeout": 60,
+        },
+    )()
+
+    delivery = describe_login_code_delivery(sent_code, operation="send_login_code")
+
+    assert delivery.delivery_method == "Telegram app/service message"
+    assert delivery.next_method == "SMS"
+    assert delivery.timeout_seconds == 60
+    assert delivery.code_length == 5
 
 
 def test_login_send_code_flood_wait_is_domain_flood_wait():

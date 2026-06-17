@@ -50,6 +50,17 @@ class LoginResult:
 
 
 @dataclass(frozen=True)
+class LoginCodeDelivery:
+    """Safe, user-displayable details about a Telegram login-code request."""
+
+    operation: str
+    delivery_method: str
+    next_method: str | None = None
+    timeout_seconds: int | None = None
+    code_length: int | None = None
+
+
+@dataclass(frozen=True)
 class TelegramDialog:
     """Displayable accessible Telegram channel/group info."""
 
@@ -90,6 +101,20 @@ class TelegramLoginCodeResendRequested(RuntimeError):
 class TelegramLoginCodeRequestFailed(RuntimeError):
     """Raised when Telegram rejects or fails a login-code send/resend request."""
 
+    def __init__(self, operation: str, exc: BaseException):
+        self.operation = operation
+        self.original_error_type = exc.__class__.__name__
+        self.original_message = str(exc)
+        if "all available options" in self.original_message.casefold():
+            message = (
+                "Telegram accepted the earlier login-code request, but it refused to send another code right now: "
+                "all delivery options for this phone number are already used. Wait a few minutes, check every logged-in "
+                "Telegram app/session for a service login message, or quit with q and re-check the saved phone/api_id/api_hash."
+            )
+        else:
+            message = f"Telegram could not {operation.replace('_', ' ')}: {self.original_message}"
+        super().__init__(message)
+
 
 def create_telegram_client(config: TelegramConfig, paths: AppPaths) -> Any:
     """Create a real Telethon client for the configured local session path."""
@@ -117,6 +142,43 @@ def _default_code_invalid_error_types() -> tuple[type[BaseException], ...]:
     return (error_type,) if isinstance(error_type, type) else ()
 
 
+def _sent_code_method_label(value: Any) -> str | None:
+    if value is None:
+        return None
+    name = value.__class__.__name__
+    labels = {
+        "SentCodeTypeApp": "Telegram app/service message",
+        "SentCodeTypeSms": "SMS",
+        "SentCodeTypeCall": "phone call",
+        "SentCodeTypeFlashCall": "flash call",
+        "SentCodeTypeMissedCall": "missed call",
+        "SentCodeTypeEmailCode": "email",
+        "SentCodeTypeFirebaseSms": "Firebase/SMS",
+        "SentCodeTypeFragmentSms": "Fragment SMS",
+        "SentCodeTypeSmsPhrase": "SMS phrase",
+        "SentCodeTypeSmsWord": "SMS word",
+        "CodeTypeSms": "SMS",
+        "CodeTypeCall": "phone call",
+        "CodeTypeFlashCall": "flash call",
+        "CodeTypeMissedCall": "missed call",
+        "CodeTypeFragmentSms": "Fragment SMS",
+    }
+    return labels.get(name, name)
+
+
+def describe_login_code_delivery(sent_code: Any, *, operation: str) -> LoginCodeDelivery:
+    """Return safe diagnostics from a Telethon SentCode object."""
+
+    code_type = getattr(sent_code, "type", None)
+    return LoginCodeDelivery(
+        operation=operation,
+        delivery_method=_sent_code_method_label(code_type) or sent_code.__class__.__name__,
+        next_method=_sent_code_method_label(getattr(sent_code, "next_type", None)),
+        timeout_seconds=getattr(sent_code, "timeout", None),
+        code_length=getattr(code_type, "length", None),
+    )
+
+
 async def _send_login_code_request(client: TelegramClientProtocol, phone: str, *, operation: str) -> Any:
     """Request a Telegram login code and convert low-level failures."""
 
@@ -125,7 +187,7 @@ async def _send_login_code_request(client: TelegramClientProtocol, phone: str, *
     except Exception as exc:
         if _is_flood_wait(exc):
             _raise_domain_flood_wait(exc, operation)
-        raise TelegramLoginCodeRequestFailed(f"Telegram could not {operation.replace('_', ' ')}: {exc}") from exc
+        raise TelegramLoginCodeRequestFailed(operation, exc) from exc
 
 
 async def ensure_telegram_login(
@@ -134,6 +196,7 @@ async def ensure_telegram_login(
     phone: str,
     code_callback: Callable[[], str | Awaitable[str]],
     password_callback: Callable[[], str | Awaitable[str]],
+    code_sent_callback: Callable[[LoginCodeDelivery], Any | Awaitable[Any]] | None = None,
     password_needed_error_types: tuple[type[BaseException], ...] | None = None,
     code_invalid_error_types: tuple[type[BaseException], ...] | None = None,
     code_attempts: int = 3,
@@ -146,6 +209,10 @@ async def ensure_telegram_login(
 
     sent_code = await _send_login_code_request(client, phone, operation="send_login_code")
     phone_code_hash = getattr(sent_code, "phone_code_hash", None)
+    if code_sent_callback is not None:
+        callback_result = code_sent_callback(describe_login_code_delivery(sent_code, operation="send_login_code"))
+        if inspect.isawaitable(callback_result):
+            await callback_result
 
     password_errors = password_needed_error_types or _default_password_error_types()
     code_invalid_errors = code_invalid_error_types or _default_code_invalid_error_types()
@@ -159,6 +226,10 @@ async def ensure_telegram_login(
         except TelegramLoginCodeResendRequested:
             sent_code = await _send_login_code_request(client, phone, operation="resend_login_code")
             phone_code_hash = getattr(sent_code, "phone_code_hash", None)
+            if code_sent_callback is not None:
+                callback_result = code_sent_callback(describe_login_code_delivery(sent_code, operation="resend_login_code"))
+                if inspect.isawaitable(callback_result):
+                    await callback_result
             continue
         sign_in_kwargs: dict[str, Any] = {"phone": phone, "code": code}
         if phone_code_hash:
