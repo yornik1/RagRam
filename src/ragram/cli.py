@@ -52,6 +52,18 @@ def _load_inquirer() -> Any:
     return inquirer
 
 
+def _print_telegram_credentials_help() -> None:
+    """Explain where users get Telegram MTProto app credentials."""
+
+    console.print("Telegram MTProto access needs api_id, api_hash, and phone number.")
+    console.print("Get api_id/api_hash here: https://my.telegram.org/apps")
+    console.print(
+        "Log in with your Telegram phone number, create an app if needed, then copy "
+        "App api_id and App api_hash. Telegram sends the confirmation code in Telegram, not SMS."
+    )
+    console.print("RagRam stores these values only in your local ~/.ragram/config.toml.")
+
+
 async def _prompt_value(prompt: Any) -> Any:
     """Execute an InquirerPy prompt without nesting asyncio.run().
 
@@ -107,7 +119,7 @@ async def _run_interactive_start(config, paths) -> None:
     store.initialize()
 
     if config.telegram.api_id is None or not config.telegram.api_hash or not config.telegram.phone:
-        console.print("Telegram MTProto access needs api_id, api_hash, and phone number.")
+        _print_telegram_credentials_help()
         api_id = await _prompt_value(inquirer.text(message="Telegram api_id:"))
         api_hash = await _prompt_value(inquirer.secret(message="Telegram api_hash:"))
         phone = await _prompt_value(inquirer.text(message="Telegram phone number:"))
@@ -311,10 +323,8 @@ def start(
     console.print(f"App home: {plan.status.app_home}")
 
     if config.telegram.api_id is None or not config.telegram.api_hash or not config.telegram.phone:
-        console.print(
-            "Telegram MTProto access needs api_id, api_hash, and phone number. "
-            "Run this command in an interactive terminal to enter them securely; api_hash/password prompts are hidden."
-        )
+        _print_telegram_credentials_help()
+        console.print("Run this command in an interactive terminal to enter them securely; api_hash/password prompts are hidden.")
 
     if _is_interactive():
         asyncio.run(_run_interactive_start(config, plan.paths))

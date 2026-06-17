@@ -47,6 +47,27 @@ Default models:
 - Better answer model: Ollama `qwen3:8b`
 - Summarization model: defaults to answer model
 
+## Telegram API credentials
+
+RagRam uses Telegram MTProto through your Telegram user account. Telegram requires an app `api_id` and `api_hash`.
+
+Get them from Telegram's app management page:
+
+```text
+https://my.telegram.org/apps
+```
+
+Steps:
+
+1. Open `https://my.telegram.org/apps`.
+2. Log in with your Telegram phone number.
+3. Telegram sends the confirmation code inside Telegram, not by SMS.
+4. Create an app if you do not already have one.
+5. Copy `App api_id` into the `Telegram api_id` prompt.
+6. Copy `App api_hash` into the hidden `Telegram api_hash` prompt.
+
+RagRam stores these credentials locally in `~/.ragram/config.toml`; it does not use `.env` or paid APIs.
+
 ## Run
 
 ```bash
