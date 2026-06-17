@@ -106,6 +106,8 @@ ragram restart --clear-data
 
 - On macOS, use `python3`, not `python`, if `python` is not installed.
 - Run `ragram start` from a real interactive terminal. The first run needs secure prompts for Telegram credentials and login code.
+- The Telegram login code is normally sent inside Telegram to an already logged-in app/session, often as a service chat or login notification. It is not shown in RagRam and may not arrive as SMS.
+- At the `Telegram login code` prompt, type `r` to request a new code or `q` to quit and re-check the saved phone/API credentials.
 - If setup was interrupted, retry with:
 
 ```bash

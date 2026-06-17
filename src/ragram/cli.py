@@ -22,6 +22,7 @@ from .progress import RichProgressReporter
 from .storage import SQLiteStore
 from .telegram_client import (
     TelegramLoginCodeInvalid,
+    TelegramLoginCodeResendRequested,
     TelegramDialog,
     create_telegram_client,
     ensure_telegram_login,
@@ -169,7 +170,24 @@ async def _run_interactive_start(config, paths) -> None:
     selected: TelegramDialog | None = None
     try:
         async def ask_login_code() -> str:
-            return str(await _prompt_value(inquirer.text(message="Telegram login code:")))
+            console.print(
+                "Telegram sent a login code to your Telegram app/session for this phone number "
+                "(usually the official 'Telegram' chat or a login notification), not to this terminal."
+            )
+            console.print("If it does not arrive, type 'r' to resend or 'q' to quit and re-check the phone number.")
+            value = str(
+                await _prompt_value(
+                    inquirer.text(
+                        message="Telegram login code (or r=resend, q=quit):",
+                    )
+                )
+            ).strip()
+            if value.casefold() in {"r", "resend"}:
+                console.print("Requesting a new Telegram login code...")
+                raise TelegramLoginCodeResendRequested()
+            if value.casefold() in {"q", "quit", "exit"}:
+                raise typer.Exit(1)
+            return value
 
         async def ask_2fa_password() -> str:
             return str(await _prompt_value(inquirer.secret(message="Telegram 2FA password:")))
@@ -365,8 +383,9 @@ def start(
     console.print(f"App home: {plan.status.app_home}")
 
     if config.telegram.api_id is None or not config.telegram.api_hash or not config.telegram.phone:
-        _print_telegram_credentials_help()
-        console.print("Run this command in an interactive terminal to enter them securely; api_hash/password prompts are hidden.")
+        if not _is_interactive():
+            _print_telegram_credentials_help()
+            console.print("Run this command in an interactive terminal to enter them securely; api_hash/password prompts are hidden.")
 
     if _is_interactive():
         asyncio.run(_run_interactive_start(config, plan.paths))
