@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from typer.testing import CliRunner
 
 from ragram.cli import app
-from ragram.config import ChannelConfig, RagRamConfig, save_config
+from ragram.config import ChannelConfig, RagRamConfig, TelegramConfig, save_config
 from ragram.models import MessageRecord
 from ragram.storage import SQLiteStore
 
@@ -219,6 +219,102 @@ def test_start_interactive_first_run_with_fakes_configures_channel_and_models(tm
     assert loaded.indexing.scope_value == "25"
     assert loaded.indexing.embedding_model == "intfloat/multilingual-e5-small"
     assert loaded.indexing.answer_model == "qwen3:8b"
+
+
+def test_start_can_reenter_saved_telegram_credentials_before_login(tmp_path, monkeypatch):
+    from ragram.config import load_config
+    from ragram.telegram_client import LoginResult, TelegramDialog
+
+    home = tmp_path / "ragram-home"
+    monkeypatch.setenv("RAGRAM_HOME", str(home))
+    monkeypatch.setattr("ragram.cli._is_interactive", lambda: True)
+    save_config(
+        RagRamConfig(telegram=TelegramConfig(api_id=111, api_hash="old-hash", phone="+10000000000")),
+        home / "config.toml",
+    )
+    session_file = home / "sessions" / "telegram.session"
+    session_file.parent.mkdir(parents=True, exist_ok=True)
+    session_file.write_text("unauthorized partial session")
+
+    class Prompt:
+        def __init__(self, value=None, choices=None):
+            self.value = value
+            self.choices = choices or []
+
+        def execute(self):
+            if self.value == "__first_choice__":
+                return self.choices[0]["value"]
+            return self.value
+
+    class FakeInquirer:
+        def confirm(self, *, message, default=True):
+            return Prompt(False)
+
+        def text(self, *, message, default=None):
+            values = {
+                "Telegram api_id:": "222",
+                "Telegram phone number (international format, e.g. +15551234567):": "+15551234567",
+                "Filter channels/groups by title (optional):": "",
+                "How many recent messages?": "10",
+            }
+            return Prompt(values.get(message, default or ""))
+
+        def secret(self, *, message):
+            return Prompt("new-hash")
+
+        def select(self, *, message, choices, default=None):
+            values = {
+                "Indexing scope:": "last_n",
+                "Embedding model:": "intfloat/multilingual-e5-small",
+                "Answer model (Ollama):": "qwen3:4b",
+                "Summarization model (Ollama):": "qwen3:4b",
+            }
+            if message == "Choose one Telegram channel/group:":
+                return Prompt("__first_choice__", choices=choices)
+            return Prompt(values[message], choices=choices)
+
+    async def fake_login(*args, **kwargs):
+        return LoginResult(reused_session=False)
+
+    async def fake_dialogs(*args, **kwargs):
+        return [TelegramDialog(entity_id=100, title="Python News", kind="channel", username="python")]
+
+    async def fake_ingest(*args, **kwargs):
+        class Result:
+            fetched_messages = 0
+            saved_messages = 0
+            last_message_id = None
+        return Result()
+
+    class FakeVectorStore:
+        def __init__(self, **kwargs):
+            pass
+
+        def upsert_chunks(self, chunks, *, entity_id):
+            return len(chunks)
+
+    created_clients = []
+
+    def fake_create_client(config, paths):
+        created_clients.append((config.api_id, config.api_hash, config.phone))
+        return object()
+
+    monkeypatch.setattr("ragram.cli._load_inquirer", lambda: FakeInquirer())
+    monkeypatch.setattr("ragram.cli.create_telegram_client", fake_create_client)
+    monkeypatch.setattr("ragram.cli.ensure_telegram_login", fake_login)
+    monkeypatch.setattr("ragram.cli.list_accessible_dialogs", fake_dialogs)
+    monkeypatch.setattr("ragram.cli.ingest_text_messages", fake_ingest)
+    monkeypatch.setattr("ragram.cli.SentenceTransformerEmbeddingProvider", lambda model_name: object())
+    monkeypatch.setattr("ragram.cli.ChromaVectorStore", FakeVectorStore)
+    monkeypatch.setattr("ragram.cli.OllamaClient", lambda: type("Client", (), {"model_status": lambda self, models: type("Status", (), {"running": True, "missing_models": ()})()})())
+
+    result = runner.invoke(app, ["start", "--no-ui"])
+
+    assert result.exit_code == 0
+    assert created_clients[0] == (222, "new-hash", "+15551234567")
+    loaded = load_config(home / "config.toml")
+    assert loaded.telegram.api_id == 222
+    assert loaded.telegram.phone == "+15551234567"
 
 
 def test_restart_clear_data_recreates_sqlite_private_permissions(tmp_path, monkeypatch):

@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 import pytest
 
 from ragram.telegram_client import (
+    TelegramLoginCodeInvalid,
     TelegramDialog,
     TelegramFloodWait,
     ensure_telegram_login,
@@ -21,6 +22,10 @@ class FakeSessionPasswordNeededError(Exception):
     pass
 
 
+class FakePhoneCodeInvalidError(Exception):
+    pass
+
+
 class FakeFloodWaitError(Exception):
     def __init__(self, seconds: int):
         super().__init__(f"wait {seconds}")
@@ -28,12 +33,13 @@ class FakeFloodWaitError(Exception):
 
 
 class FakeClient:
-    def __init__(self, *, authorized=False, dialogs=None, entity=None, password_needed=False, flood_wait=None):
+    def __init__(self, *, authorized=False, dialogs=None, entity=None, password_needed=False, flood_wait=None, invalid_code_attempts=0):
         self.authorized = authorized
         self.dialogs = dialogs or []
         self.entity = entity
         self.password_needed = password_needed
         self.flood_wait = flood_wait
+        self.invalid_code_attempts = invalid_code_attempts
         self.connected = False
         self.sent_code_to = None
         self.sign_in_calls = []
@@ -51,6 +57,9 @@ class FakeClient:
 
     async def sign_in(self, **kwargs):
         self.sign_in_calls.append(kwargs)
+        if self.invalid_code_attempts > 0 and "code" in kwargs:
+            self.invalid_code_attempts -= 1
+            raise FakePhoneCodeInvalidError()
         if self.password_needed and "password" not in kwargs:
             raise FakeSessionPasswordNeededError()
         self.authorized = True
@@ -150,6 +159,45 @@ def test_login_uses_code_hash_and_2fa_password_when_required():
         "phone_code_hash": "hash-123",
     }
         assert client.sign_in_calls[1] == {"password": "2fa-secret"}
+
+    asyncio.run(scenario())
+
+
+def test_login_retries_invalid_code_before_success():
+    async def scenario():
+        client = FakeClient(invalid_code_attempts=1)
+        codes = iter(["11111", "22222"])
+
+        result = await ensure_telegram_login(
+            client,
+            phone="+15550000000",
+            code_callback=lambda: next(codes),
+            password_callback=lambda: "secret",
+            code_invalid_error_types=(FakePhoneCodeInvalidError,),
+        )
+
+        assert result.reused_session is False
+        assert [call["code"] for call in client.sign_in_calls] == ["11111", "22222"]
+
+    asyncio.run(scenario())
+
+
+def test_login_raises_domain_error_after_invalid_code_retries():
+    async def scenario():
+        client = FakeClient(invalid_code_attempts=3)
+        codes = iter(["11111", "22222", "33333"])
+
+        with pytest.raises(TelegramLoginCodeInvalid):
+            await ensure_telegram_login(
+                client,
+                phone="+15550000000",
+                code_callback=lambda: next(codes),
+                password_callback=lambda: "secret",
+                code_invalid_error_types=(FakePhoneCodeInvalidError,),
+                code_attempts=3,
+            )
+
+        assert len(client.sign_in_calls) == 3
 
     asyncio.run(scenario())
 

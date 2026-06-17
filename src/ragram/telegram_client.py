@@ -79,6 +79,10 @@ class DialogNotFoundError(ValueError):
     """Raised when a custom dialog choice cannot be resolved."""
 
 
+class TelegramLoginCodeInvalid(RuntimeError):
+    """Raised when Telegram rejects the login code after retries."""
+
+
 def create_telegram_client(config: TelegramConfig, paths: AppPaths) -> Any:
     """Create a real Telethon client for the configured local session path."""
 
@@ -98,6 +102,13 @@ def _default_password_error_types() -> tuple[type[BaseException], ...]:
     return (error_type,) if isinstance(error_type, type) else ()
 
 
+def _default_code_invalid_error_types() -> tuple[type[BaseException], ...]:
+    if telethon_errors is None:
+        return ()
+    error_type = getattr(telethon_errors, "PhoneCodeInvalidError", None)
+    return (error_type,) if isinstance(error_type, type) else ()
+
+
 async def ensure_telegram_login(
     client: TelegramClientProtocol,
     *,
@@ -105,6 +116,8 @@ async def ensure_telegram_login(
     code_callback: Callable[[], str | Awaitable[str]],
     password_callback: Callable[[], str | Awaitable[str]],
     password_needed_error_types: tuple[type[BaseException], ...] | None = None,
+    code_invalid_error_types: tuple[type[BaseException], ...] | None = None,
+    code_attempts: int = 3,
 ) -> LoginResult:
     """Connect and authorize a Telegram user session, reusing it when possible."""
 
@@ -114,23 +127,34 @@ async def ensure_telegram_login(
 
     sent_code = await client.send_code_request(phone)
     phone_code_hash = getattr(sent_code, "phone_code_hash", None)
-    code = code_callback()
-    if inspect.isawaitable(code):
-        code = await code
-    sign_in_kwargs: dict[str, Any] = {"phone": phone, "code": code}
-    if phone_code_hash:
-        sign_in_kwargs["phone_code_hash"] = phone_code_hash
 
     password_errors = password_needed_error_types or _default_password_error_types()
-    try:
-        await client.sign_in(**sign_in_kwargs)
-        return LoginResult(reused_session=False)
-    except password_errors:  # type: ignore[misc]
-        password = password_callback()
-        if inspect.isawaitable(password):
-            password = await password
-        await client.sign_in(password=password)
-        return LoginResult(reused_session=False, required_2fa=True)
+    code_invalid_errors = code_invalid_error_types or _default_code_invalid_error_types()
+    attempts = max(1, code_attempts)
+    for attempt in range(1, attempts + 1):
+        code = code_callback()
+        if inspect.isawaitable(code):
+            code = await code
+        sign_in_kwargs: dict[str, Any] = {"phone": phone, "code": code}
+        if phone_code_hash:
+            sign_in_kwargs["phone_code_hash"] = phone_code_hash
+        try:
+            await client.sign_in(**sign_in_kwargs)
+            return LoginResult(reused_session=False)
+        except code_invalid_errors as exc:  # type: ignore[misc]
+            if attempt >= attempts:
+                raise TelegramLoginCodeInvalid(
+                    "Telegram login code was invalid or expired. Check the latest code in Telegram and run ragram start again."
+                ) from exc
+            continue
+        except password_errors:  # type: ignore[misc]
+            password = password_callback()
+            if inspect.isawaitable(password):
+                password = await password
+            await client.sign_in(password=password)
+            return LoginResult(reused_session=False, required_2fa=True)
+
+    raise TelegramLoginCodeInvalid("Telegram login code was invalid or expired.")
 
 
 def _entity_kind(dialog: Any, entity: Any) -> str | None:

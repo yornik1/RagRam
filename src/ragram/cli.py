@@ -21,6 +21,7 @@ from .models import ChannelRecord, IndexScope
 from .progress import RichProgressReporter
 from .storage import SQLiteStore
 from .telegram_client import (
+    TelegramLoginCodeInvalid,
     TelegramDialog,
     create_telegram_client,
     ensure_telegram_login,
@@ -102,6 +103,28 @@ def _scope_from_config(scope_type: str, scope_value: str | None) -> IndexScope:
     return IndexScope.last_n(int(scope_value or "1000"))
 
 
+def _telegram_config_complete(config: Any) -> bool:
+    return config.telegram.api_id is not None and bool(config.telegram.api_hash) and bool(config.telegram.phone)
+
+
+def _session_path_candidates(paths: Any, session_name: str) -> tuple[Any, Any]:
+    session_path = paths.sessions_dir / session_name
+    return session_path, session_path.with_suffix(".session")
+
+
+def _has_telegram_session(paths: Any, session_name: str) -> bool:
+    return any(path.exists() for path in _session_path_candidates(paths, session_name))
+
+
+def _reset_telegram_credentials(config: Any, paths: Any) -> None:
+    for session_path in _session_path_candidates(paths, config.telegram.session_name):
+        if session_path.exists():
+            session_path.unlink()
+    config.telegram.api_id = None
+    config.telegram.api_hash = None
+    config.telegram.phone = None
+
+
 async def _disconnect_if_supported(client: Any) -> None:
     disconnect = getattr(client, "disconnect", None)
     if disconnect is None:
@@ -118,11 +141,25 @@ async def _run_interactive_start(config, paths) -> None:
     store = SQLiteStore(paths.sqlite_path)
     store.initialize()
 
-    if config.telegram.api_id is None or not config.telegram.api_hash or not config.telegram.phone:
+    if _telegram_config_complete(config) and (
+        config.channel.entity_id is None or not _has_telegram_session(paths, config.telegram.session_name)
+    ):
+        console.print(f"Saved Telegram phone/config found: {config.telegram.phone}")
+        use_saved = await _prompt_value(
+            inquirer.confirm(
+                message="Use saved Telegram credentials? Choose No to re-enter api_id/api_hash/phone.",
+                default=True,
+            )
+        )
+        if not use_saved:
+            _reset_telegram_credentials(config, paths)
+            save_config(config, paths.config_path)
+
+    if not _telegram_config_complete(config):
         _print_telegram_credentials_help()
         api_id = await _prompt_value(inquirer.text(message="Telegram api_id:"))
         api_hash = await _prompt_value(inquirer.secret(message="Telegram api_hash:"))
-        phone = await _prompt_value(inquirer.text(message="Telegram phone number:"))
+        phone = await _prompt_value(inquirer.text(message="Telegram phone number (international format, e.g. +15551234567):"))
         config.telegram.api_id = int(str(api_id).strip())
         config.telegram.api_hash = str(api_hash).strip()
         config.telegram.phone = str(phone).strip()
@@ -137,12 +174,17 @@ async def _run_interactive_start(config, paths) -> None:
         async def ask_2fa_password() -> str:
             return str(await _prompt_value(inquirer.secret(message="Telegram 2FA password:")))
 
-        login = await ensure_telegram_login(
-            client,
-            phone=config.telegram.phone or "",
-            code_callback=ask_login_code,
-            password_callback=ask_2fa_password,
-        )
+        try:
+            login = await ensure_telegram_login(
+                client,
+                phone=config.telegram.phone or "",
+                code_callback=ask_login_code,
+                password_callback=ask_2fa_password,
+            )
+        except TelegramLoginCodeInvalid as exc:
+            console.print(f"[red]{exc}[/red]")
+            console.print("Tip: use the newest code from Telegram. If the phone/api_id/api_hash is wrong, run ragram restart --reconfigure or choose No when asked to use saved credentials.")
+            raise typer.Exit(1) from exc
         console.print("Telegram session reused." if login.reused_session else "Telegram session saved locally.")
 
         dialogs = await list_accessible_dialogs(client, limit=200)
