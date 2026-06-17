@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 
 from typer.testing import CliRunner
 
-from ragram.cli import app
+from ragram.cli import _normalize_login_code, app
 from ragram.config import ChannelConfig, RagRamConfig, TelegramConfig, save_config
 from ragram.models import MessageRecord
 from ragram.storage import SQLiteStore
@@ -19,6 +19,12 @@ class FakeVectorStore:
     def upsert_chunks(self, chunks, *, entity_id):
         self.upserts.append({"chunks": chunks, "entity_id": entity_id})
         return len(chunks)
+
+
+def test_login_code_normalization_accepts_human_separators_and_rejects_app_token_shape():
+    assert _normalize_login_code("1 2 3 4 5") == "12345"
+    assert _normalize_login_code("1-2-3-4-5") == "12345"
+    assert not _normalize_login_code("8cGyeMmwPVY").isdigit()
 
 
 def test_start_no_ui_creates_config_and_initializes_sqlite(tmp_path, monkeypatch):

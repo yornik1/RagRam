@@ -197,6 +197,7 @@ async def ensure_telegram_login(
     code_callback: Callable[[], str | Awaitable[str]],
     password_callback: Callable[[], str | Awaitable[str]],
     code_sent_callback: Callable[[LoginCodeDelivery], Any | Awaitable[Any]] | None = None,
+    code_invalid_callback: Callable[[int, int], Any | Awaitable[Any]] | None = None,
     password_needed_error_types: tuple[type[BaseException], ...] | None = None,
     code_invalid_error_types: tuple[type[BaseException], ...] | None = None,
     code_attempts: int = 3,
@@ -242,6 +243,10 @@ async def ensure_telegram_login(
                 raise TelegramLoginCodeInvalid(
                     "Telegram login code was invalid or expired. Check the latest code in Telegram and run ragram start again."
                 ) from exc
+            if code_invalid_callback is not None:
+                callback_result = code_invalid_callback(attempt, attempts)
+                if inspect.isawaitable(callback_result):
+                    await callback_result
             attempt += 1
             continue
         except password_errors:  # type: ignore[misc]

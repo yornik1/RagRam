@@ -196,17 +196,20 @@ def test_login_retries_invalid_code_before_success():
     async def scenario():
         client = FakeClient(invalid_code_attempts=1)
         codes = iter(["11111", "22222"])
+        invalid_attempts = []
 
         result = await ensure_telegram_login(
             client,
             phone="+15550000000",
             code_callback=lambda: next(codes),
             password_callback=lambda: "secret",
+            code_invalid_callback=lambda attempt, attempts: invalid_attempts.append((attempt, attempts)),
             code_invalid_error_types=(FakePhoneCodeInvalidError,),
         )
 
         assert result.reused_session is False
         assert [call["code"] for call in client.sign_in_calls] == ["11111", "22222"]
+        assert invalid_attempts == [(1, 3)]
 
     asyncio.run(scenario())
 

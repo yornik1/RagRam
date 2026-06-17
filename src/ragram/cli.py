@@ -132,6 +132,12 @@ def _valid_phone_number(value: str) -> bool:
     return value.startswith("+") and value[1:].isdigit() and 8 <= len(value[1:]) <= 15
 
 
+def _normalize_login_code(value: str) -> str:
+    """Normalize a Telegram numeric login code typed by a human."""
+
+    return value.strip().replace(" ", "").replace("-", "")
+
+
 async def _disconnect_if_supported(client: Any) -> None:
     disconnect = getattr(client, "disconnect", None)
     if disconnect is None:
@@ -188,6 +194,7 @@ async def _run_interactive_start(config, paths) -> None:
 
     client = create_telegram_client(config.telegram, paths)
     selected: TelegramDialog | None = None
+    expected_code_length: int | None = None
     try:
         async def ask_login_code() -> str:
             while True:
@@ -208,14 +215,31 @@ async def _run_interactive_start(config, paths) -> None:
                     raise TelegramLoginCodeResendRequested()
                 if value.casefold() in {"q", "quit", "exit"}:
                     raise typer.Exit(1)
-                if value:
-                    return value
-                console.print("[red]Enter the Telegram login code, or type r to retry / q to quit.[/red]")
+                normalized = _normalize_login_code(value)
+                if not normalized:
+                    console.print("[red]Enter the Telegram login code, or type r to retry / q to quit.[/red]")
+                    continue
+                if not normalized.isdigit():
+                    console.print(
+                        "[red]This is not the Telegram app login code. Expected digits only"
+                        + (f" ({expected_code_length} digits)" if expected_code_length else "")
+                        + ". The code from my.telegram.org/apps is a different code and will not work here.[/red]"
+                    )
+                    continue
+                if expected_code_length is not None and len(normalized) != expected_code_length:
+                    console.print(
+                        f"[red]Telegram said this login code should be {expected_code_length} digits; "
+                        f"you entered {len(normalized)} digits. Check the latest Telegram app/service message.[/red]"
+                    )
+                    continue
+                return normalized
 
         async def ask_2fa_password() -> str:
             return str(await _prompt_value(inquirer.secret(message="Telegram 2FA password:")))
 
         def show_code_delivery(delivery) -> None:
+            nonlocal expected_code_length
+            expected_code_length = delivery.code_length
             console.print(
                 f"Telegram accepted {delivery.operation.replace('_', ' ')}. "
                 f"Delivery method: {delivery.delivery_method}."
@@ -236,6 +260,9 @@ async def _run_interactive_start(config, paths) -> None:
                 code_callback=ask_login_code,
                 password_callback=ask_2fa_password,
                 code_sent_callback=show_code_delivery,
+                code_invalid_callback=lambda attempt, attempts: console.print(
+                    f"[red]Telegram rejected that code. Attempt {attempt}/{attempts}; check the newest {expected_code_length or ''}-digit Telegram login code.[/red]"
+                ),
             )
         except TelegramLoginCodeInvalid as exc:
             console.print(f"[red]{exc}[/red]")
