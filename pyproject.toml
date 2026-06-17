@@ -1,0 +1,49 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ragram"
+version = "0.1.0"
+description = "Local-first Telegram channel RAG scaffold using local models."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "RagRam contributors" }]
+keywords = ["telegram", "rag", "local-first", "ollama", "chroma"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: End Users/Desktop",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+]
+dependencies = [
+  "typer>=0.12,<1.0",
+  "rich>=13.7,<15.0",
+  "inquirerpy>=0.3,<1.0",
+  "telethon>=1.36,<2.0",
+  "tomli-w>=1.0,<2.0",
+  "requests>=2.31,<3.0",
+  "chromadb>=0.5,<1.0; python_version < '3.14'",
+  "sentence-transformers>=3.0,<6.0; python_version < '3.14'",
+  "streamlit>=1.36,<2.0; python_version < '3.14'",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.2,<10.0",
+]
+
+[project.scripts]
+ragram = "ragram.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ragram"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

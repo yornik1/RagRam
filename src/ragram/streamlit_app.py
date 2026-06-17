@@ -1,0 +1,96 @@
+"""Streamlit entrypoint for RagRam's local UI.
+
+This module is intentionally thin: it loads local config, constructs local-only
+providers, and renders question answering over the selected Telegram channel.
+"""
+
+from __future__ import annotations
+
+from .config import app_paths, load_config
+from .embeddings import SentenceTransformerEmbeddingProvider
+from .llm import ANSWER_MODEL_CHOICES, OllamaClient
+from .rag import RagService
+from .ui import DEFAULT_TOP_K, MAX_TOP_K, MIN_TOP_K, build_ui_state, render_answer_payload, source_label
+from .vector_store import ChromaVectorStore
+
+
+def _provider_error_message(exc: Exception) -> str:
+    return (
+        "Local vector/embedding dependencies are not ready. "
+        "Install local extras with `pip install -e '.[local]'`, then ensure the selected embedding model is available. "
+        f"Details: {exc}"
+    )
+
+
+def main() -> None:  # pragma: no cover - rendered by Streamlit, unit-tested through helpers.
+    import streamlit as st
+
+    paths = app_paths()
+    config = load_config(paths.config_path)
+    state = build_ui_state(config)
+
+    st.set_page_config(page_title="RagRam", page_icon="🦙", layout="wide")
+    st.title("RagRam")
+    st.caption("Local-first Telegram channel Q&A. No paid APIs are used.")
+
+    with st.sidebar:
+        st.header("Selected channel")
+        st.write(f"**Title:** {state.channel_title}")
+        st.write(f"**Username:** {state.channel_username or '—'}")
+        st.write(f"**Entity ID:** {state.entity_id or '—'}")
+        st.divider()
+        answer_model = st.selectbox(
+            "Answer model",
+            ANSWER_MODEL_CHOICES,
+            index=ANSWER_MODEL_CHOICES.index(state.answer_model)
+            if state.answer_model in ANSWER_MODEL_CHOICES
+            else 0,
+        )
+        top_k = st.slider("Retrieved chunks", min_value=MIN_TOP_K, max_value=MAX_TOP_K, value=DEFAULT_TOP_K)
+        show_raw_context = st.checkbox("Show raw context", value=False)
+        st.write(f"**Embedding:** {state.embedding_model}")
+        st.write(f"**Summarization:** {state.summarization_model}")
+
+    if state.entity_id is None:
+        st.warning("No Telegram channel is selected yet. Run `ragram start` to configure one.")
+        return
+
+    question = st.text_area("Question", placeholder="Например: какие основные темы обсуждались в канале?", height=90)
+    ask = st.button("Ask RagRam", type="primary", disabled=not question.strip())
+
+    if not ask:
+        st.info("Ask a question to retrieve local Telegram context and generate a grounded answer.")
+        return
+
+    try:
+        embedding_provider = SentenceTransformerEmbeddingProvider(state.embedding_model)
+        vector_store = ChromaVectorStore(embedding_provider=embedding_provider, persist_directory=paths.chroma_dir)
+        service = RagService(
+            retriever=vector_store,
+            llm=OllamaClient(),
+            entity_id=state.entity_id,
+            answer_model=answer_model,
+        )
+        grounded = service.answer(question.strip(), top_k=top_k)
+    except Exception as exc:
+        st.error(_provider_error_message(exc))
+        return
+
+    payload = render_answer_payload(grounded, show_raw_context=show_raw_context)
+    st.subheader("Answer")
+    st.write(payload["answer"])
+
+    st.subheader("Sources")
+    if not payload["sources"]:
+        st.write("No sources returned.")
+    for index, source in enumerate(payload["sources"], start=1):
+        with st.expander(f"{index}. {source_label(source)}", expanded=index <= 3):
+            st.json(source)
+
+    if payload["raw_context"]:
+        st.subheader("Raw context")
+        st.text(payload["raw_context"])
+
+
+if __name__ == "__main__":  # pragma: no cover
+    main()

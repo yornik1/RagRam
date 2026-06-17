@@ -1,1 +1,116 @@
 # RagRam
+
+RagRam is a local-first MVP for asking grounded questions over **one Telegram channel/group** using local storage, local embeddings, Chroma, and Ollama. It is a small Python product scaffold, not a raw script.
+
+## Principles
+
+- Main command: `ragram start`.
+- No `.env` required.
+- No paid APIs and no OpenAI/Anthropic hosted APIs in the MVP.
+- macOS/Python-first.
+- Telegram access uses your Telegram user account via Telethon/MTProto.
+- Data stays under `~/.ragram/` unless `RAGRAM_HOME` is set.
+
+## Install
+
+Use Python 3.11-3.13 for the full local ML/UI stack.
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e .
+```
+
+For development tests:
+
+```bash
+pip install -e '.[dev]'
+pytest
+```
+
+The base install includes the local MVP runtime (`sentence-transformers`, `chromadb`, `streamlit`). It still does not download embedding or Ollama model weights until the first real indexing/model use.
+
+## Local model prerequisites
+
+Install and run Ollama, then pull one or both MVP answer models:
+
+```bash
+ollama pull qwen3:4b
+ollama pull qwen3:8b
+```
+
+Default models:
+
+- Embeddings: `ai-forever/ru-en-RoSBERTa`
+- Embedding fallbacks: `BAAI/bge-m3`, `intfloat/multilingual-e5-small`
+- Answer model: Ollama `qwen3:4b`
+- Better answer model: Ollama `qwen3:8b`
+- Summarization model: defaults to answer model
+
+## Run
+
+```bash
+ragram start
+```
+
+Interactive `start` will:
+
+1. Create local folders and config under `~/.ragram/`.
+2. Ask for Telegram `api_id`, hidden `api_hash`, and phone number if missing.
+3. Login through Telethon, including login code and 2FA password when Telegram requires it.
+4. List accessible channels/groups by recent activity and allow custom username/URL/title/entity id input.
+5. Ask indexing scope: last N (default 1000), all, from year, or from exact date.
+6. Ask embedding, answer, and summarization model choices.
+7. Store raw messages in SQLite before embedding.
+8. Chunk, embed, and write vectors to Chroma.
+9. Launch Streamlit and print a local URL, for example:
+
+```text
+Open RagRam: http://localhost:8501
+```
+
+Useful variants:
+
+```bash
+ragram start --no-ui
+ragram start --ui-port 8601
+ragram status
+ragram restart
+ragram restart --clear-data
+```
+
+`restart --clear-data` asks confirmation before deleting local raw SQLite data and Chroma indexes.
+
+## Troubleshooting
+
+- On macOS, use `python3`, not `python`, if `python` is not installed.
+- Run `ragram start` from a real interactive terminal. The first run needs secure prompts for Telegram credentials and login code.
+- If setup was interrupted, retry with:
+
+```bash
+ragram restart --reconfigure
+ragram start
+```
+
+## Local storage layout
+
+```text
+~/.ragram/
+  config.toml
+  sessions/
+  data/
+    ragram.sqlite
+    chroma/
+  logs/
+```
+
+## Current MVP limitations
+
+- Text-only Telegram messages.
+- One selected channel/group at a time.
+- Local-only models/providers.
+- Automated tests use fakes for Telegram/Ollama/Chroma; real Telegram login is a manual local smoke path because it requires user credentials and Telegram delivery of a login code.
+
+## Planning docs
+
+See `docs/README.md` for the product spec, architecture, acceptance matrix, ADR, and implementation plan.
