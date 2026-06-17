@@ -21,7 +21,9 @@ from .models import ChannelRecord, IndexScope
 from .progress import RichProgressReporter
 from .storage import SQLiteStore
 from .telegram_client import (
+    TelegramFloodWait,
     TelegramLoginCodeInvalid,
+    TelegramLoginCodeRequestFailed,
     TelegramLoginCodeResendRequested,
     TelegramDialog,
     create_telegram_client,
@@ -202,6 +204,13 @@ async def _run_interactive_start(config, paths) -> None:
         except TelegramLoginCodeInvalid as exc:
             console.print(f"[red]{exc}[/red]")
             console.print("Tip: use the newest code from Telegram. If the phone/api_id/api_hash is wrong, run ragram restart --reconfigure or choose No when asked to use saved credentials.")
+            raise typer.Exit(1) from exc
+        except TelegramFloodWait as exc:
+            console.print(f"[red]Telegram is rate-limiting login-code requests. Wait {exc.seconds} seconds, then run ragram start again.[/red]")
+            raise typer.Exit(1) from exc
+        except TelegramLoginCodeRequestFailed as exc:
+            console.print(f"[red]{exc}[/red]")
+            console.print("Tip: wait a minute before resending. If this persists, quit with q, choose No for saved credentials, and re-check phone/api_id/api_hash.")
             raise typer.Exit(1) from exc
         console.print("Telegram session reused." if login.reused_session else "Telegram session saved locally.")
 

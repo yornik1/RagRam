@@ -87,6 +87,10 @@ class TelegramLoginCodeResendRequested(RuntimeError):
     """Raised by the UI callback when the user asks Telegram to resend a code."""
 
 
+class TelegramLoginCodeRequestFailed(RuntimeError):
+    """Raised when Telegram rejects or fails a login-code send/resend request."""
+
+
 def create_telegram_client(config: TelegramConfig, paths: AppPaths) -> Any:
     """Create a real Telethon client for the configured local session path."""
 
@@ -113,6 +117,17 @@ def _default_code_invalid_error_types() -> tuple[type[BaseException], ...]:
     return (error_type,) if isinstance(error_type, type) else ()
 
 
+async def _send_login_code_request(client: TelegramClientProtocol, phone: str, *, operation: str) -> Any:
+    """Request a Telegram login code and convert low-level failures."""
+
+    try:
+        return await client.send_code_request(phone)
+    except Exception as exc:
+        if _is_flood_wait(exc):
+            _raise_domain_flood_wait(exc, operation)
+        raise TelegramLoginCodeRequestFailed(f"Telegram could not {operation.replace('_', ' ')}: {exc}") from exc
+
+
 async def ensure_telegram_login(
     client: TelegramClientProtocol,
     *,
@@ -129,7 +144,7 @@ async def ensure_telegram_login(
     if await client.is_user_authorized():
         return LoginResult(reused_session=True)
 
-    sent_code = await client.send_code_request(phone)
+    sent_code = await _send_login_code_request(client, phone, operation="send_login_code")
     phone_code_hash = getattr(sent_code, "phone_code_hash", None)
 
     password_errors = password_needed_error_types or _default_password_error_types()
@@ -142,7 +157,7 @@ async def ensure_telegram_login(
             if inspect.isawaitable(code):
                 code = await code
         except TelegramLoginCodeResendRequested:
-            sent_code = await client.send_code_request(phone)
+            sent_code = await _send_login_code_request(client, phone, operation="resend_login_code")
             phone_code_hash = getattr(sent_code, "phone_code_hash", None)
             continue
         sign_in_kwargs: dict[str, Any] = {"phone": phone, "code": code}
