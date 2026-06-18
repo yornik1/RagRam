@@ -406,6 +406,7 @@ def test_start_qr_login_does_not_require_phone_number(tmp_path, monkeypatch):
             return len(chunks)
 
     monkeypatch.setattr("ragram.cli._load_inquirer", lambda: FakeInquirer())
+    monkeypatch.setattr("ragram.cli._open_file_if_supported", lambda path: False)
     monkeypatch.setattr("ragram.cli.create_telegram_client", lambda config, paths: FakeAuthClient())
     monkeypatch.setattr("ragram.cli.ensure_telegram_qr_login", fake_qr_login)
     monkeypatch.setattr("ragram.cli.list_accessible_dialogs", fake_dialogs)
@@ -417,7 +418,8 @@ def test_start_qr_login_does_not_require_phone_number(tmp_path, monkeypatch):
     result = runner.invoke(app, ["start", "--no-ui"])
 
     assert result.exit_code == 0
-    assert "Scan this QR" in result.stdout
+    assert "QR image saved:" in result.stdout
+    assert (home / "qr-login.png").exists()
     loaded = load_config(home / "config.toml")
     assert loaded.telegram.api_id == 222
     assert loaded.telegram.phone is None

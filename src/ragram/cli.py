@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import io
+import subprocess
 import shutil
 import sys
 import uuid
+from pathlib import Path
 from typing import Any
 
 import typer
@@ -161,6 +163,42 @@ def _render_qr_ascii(url: str) -> str | None:
     return output.getvalue()
 
 
+def _write_qr_png(url: str, output_path: Path) -> Path | None:
+    """Write a scannable QR PNG for Telegram QR login.
+
+    Terminal QR rendering is fragile across fonts, scaling, and line-height
+    settings. A real image gives the Telegram mobile scanner a stable target.
+    """
+
+    try:
+        import qrcode
+    except ImportError:
+        return None
+    try:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        image: Any = qrcode.make(url, border=4)
+        image.save(str(output_path))
+        return output_path
+    except Exception:
+        return None
+
+
+def _open_file_if_supported(path: Path) -> bool:
+    """Open a local file with the OS default viewer when safe and supported."""
+
+    if sys.platform != "darwin":
+        return False
+    try:
+        subprocess.Popen(
+            ["open", str(path)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        return False
+    return True
+
+
 async def _disconnect_if_supported(client: Any) -> None:
     disconnect = getattr(client, "disconnect", None)
     if disconnect is None:
@@ -275,12 +313,22 @@ async def _run_interactive_start(config, paths) -> None:
             return str(await _prompt_value(inquirer.secret(message="Telegram 2FA password:")))
 
         def show_qr_login(challenge) -> None:
-            console.print("Scan this QR from an already logged-in Telegram app:")
+            console.print("Scan the QR from an already logged-in Telegram mobile app:")
             console.print("Telegram mobile: Settings → Devices → Link Desktop Device.")
-            rendered = _render_qr_ascii(challenge.url)
-            if rendered:
-                console.print(rendered)
+            qr_path = _write_qr_png(challenge.url, paths.home / "qr-login.png")
+            if qr_path is not None:
+                console.print(f"QR image saved: {qr_path}")
+                if _open_file_if_supported(qr_path):
+                    console.print("Opened the QR image automatically.")
+                elif sys.platform == "darwin":
+                    console.print(f"If it did not open, run: open {qr_path}")
+                else:
+                    console.print("Open this PNG file in your image viewer, then scan it from Telegram mobile.")
             else:
+                console.print("[yellow]Could not write QR PNG; falling back to terminal QR/URL.[/yellow]")
+                rendered = _render_qr_ascii(challenge.url)
+                if rendered:
+                    console.print(rendered)
                 console.print(f"QR URL fallback: {challenge.url}")
             if challenge.expires_at:
                 console.print(f"QR expires at: {challenge.expires_at}")

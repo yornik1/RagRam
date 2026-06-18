@@ -19,3 +19,5 @@ dist/
 # Local runtime state
 .omx/
 .ragram/
+*.session
+*.session-journal
