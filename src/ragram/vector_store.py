@@ -45,12 +45,13 @@ class ChromaVectorStore:
             raise ValueError("persist_directory is required when client is not supplied")
         try:
             import chromadb
+            from chromadb.config import Settings
         except ImportError as exc:  # pragma: no cover - exercised only without optional extra.
             raise RuntimeError(
                 "chromadb is required for persistent vector storage. "
                 "Install RagRam with: pip install -e '.[local]'"
             ) from exc
-        return chromadb.PersistentClient(path=str(persist_directory))
+        return chromadb.PersistentClient(path=str(persist_directory), settings=Settings(anonymized_telemetry=False))
 
     def collection(self, *, entity_id: int):
         return self.client.get_or_create_collection(

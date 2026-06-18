@@ -38,7 +38,7 @@ class OllamaModelStatus:
 def pull_commands_for_missing_models(models: Iterable[str]) -> list[str]:
     """Return exact shell commands users can run to install Ollama models."""
 
-    return [f"ollama pull {model}" for model in models]
+    return [f"ollama pull {model}" for model in dict.fromkeys(models)]
 
 
 class OllamaClient:

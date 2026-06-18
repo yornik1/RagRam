@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sys
+import types
 from datetime import UTC, datetime
 
 from ragram.embeddings import (
@@ -137,3 +139,27 @@ def test_model_change_uses_separate_collection_for_reindexing():
         collection_name(entity_id=100, embedding_model="model-a"),
         collection_name(entity_id=100, embedding_model="model-b"),
     }
+
+
+def test_persistent_chroma_client_disables_anonymized_telemetry(tmp_path, monkeypatch):
+    captured = {}
+
+    class FakeSettings:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    fake_chromadb = types.SimpleNamespace(
+        PersistentClient=lambda **kwargs: captured.setdefault("client_kwargs", kwargs) or object()
+    )
+    fake_config = types.SimpleNamespace(Settings=FakeSettings)
+    monkeypatch.setitem(sys.modules, "chromadb", fake_chromadb)
+    monkeypatch.setitem(sys.modules, "chromadb.config", fake_config)
+
+    ChromaVectorStore(
+        embedding_provider=FakeEmbeddingProvider(model_name="model-a", dimensions=3),
+        persist_directory=tmp_path,
+    )
+
+    settings = captured["client_kwargs"]["settings"]
+    assert captured["client_kwargs"]["path"] == str(tmp_path)
+    assert settings.kwargs["anonymized_telemetry"] is False

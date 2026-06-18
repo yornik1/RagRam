@@ -81,6 +81,7 @@ def test_ollama_defaults_and_pull_commands():
         "ollama pull qwen3:4b",
         "ollama pull qwen3:8b",
     ]
+    assert pull_commands_for_missing_models(["qwen3:4b", "qwen3:4b"]) == ["ollama pull qwen3:4b"]
 
 
 def test_ollama_model_status_detects_running_and_missing_models():
