@@ -111,15 +111,24 @@ def test_ollama_generate_uses_non_streaming_api_and_returns_text():
     ]
 
 
-def test_build_grounded_prompt_requires_context_language_and_uncertainty():
+def test_build_grounded_prompt_uses_russian_rules_for_russian_questions():
     prompt = build_grounded_prompt(question="Что такое RagRam?", contexts=[retrieval()], top_k=8)
 
-    assert "answer only from the retrieved context" in prompt
-    assert "If the context is insufficient" in prompt
-    assert "Answer in the language of the question" in prompt
+    assert "отвечай только по найденному контексту" in prompt
+    assert "найденных сообщений недостаточно" in prompt
+    assert "отвечай строго на русском языке" in prompt
     assert "Что такое RagRam?" in prompt
     assert "RagRam хранит данные локально" in prompt
     assert "Source c1" in prompt
+
+
+def test_build_grounded_prompt_uses_english_rules_for_english_questions():
+    prompt = build_grounded_prompt(question="What is RagRam?", contexts=[retrieval()], top_k=8)
+
+    assert "answer only from the retrieved context" in prompt
+    assert "If the context is insufficient" in prompt
+    assert "Answer strictly in English" in prompt
+    assert "What is RagRam?" in prompt
 
 
 def test_format_sources_preserves_dates_and_message_ids():

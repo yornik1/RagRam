@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import socket
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -41,6 +42,27 @@ class UiState:
 DEFAULT_TOP_K = 8
 MIN_TOP_K = 1
 MAX_TOP_K = 20
+
+
+def port_available(port: int, *, host: str = "127.0.0.1") -> bool:
+    """Return whether a localhost TCP port can be bound for the UI."""
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind((host, port))
+        except OSError:
+            return False
+    return True
+
+
+def first_available_port(start_port: int, *, host: str = "127.0.0.1", limit: int = 50) -> int:
+    """Return the requested port or the next nearby free localhost port."""
+
+    for port in range(start_port, min(65535, start_port + limit) + 1):
+        if port_available(port, host=host):
+            return port
+    raise RuntimeError(f"No free local UI port found near {start_port}.")
 
 
 def streamlit_app_path() -> Path:
@@ -85,7 +107,7 @@ def build_ui_launch_plan(*, paths: AppPaths, port: int) -> UiLaunchPlan:
 def launch_streamlit_ui(*, paths: AppPaths, port: int, popen: Any = subprocess.Popen) -> UiLaunchPlan:
     """Launch the local Streamlit UI in a background process and return its URL plan."""
 
-    plan = build_ui_launch_plan(paths=paths, port=port)
+    plan = build_ui_launch_plan(paths=paths, port=first_available_port(port))
     try:
         popen(plan.command, env=plan.environment)  # noqa: S603 - command is package-local and deterministic.
     except FileNotFoundError as exc:  # pragma: no cover - defensive around broken Python executable.

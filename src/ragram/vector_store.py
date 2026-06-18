@@ -27,6 +27,34 @@ class RetrievalResult:
     distance: float | None = None
 
 
+class NoOpChromaTelemetry:
+    """Disable Chroma product telemetry and its noisy PostHog client.
+
+    Chroma 0.6.x can still instantiate the PostHog telemetry client even when
+    anonymized telemetry is disabled; with some posthog versions that logs
+    `capture()` signature errors to the user's terminal. Pointing Chroma at this
+    no-op implementation keeps RagRam local-first and quiet.
+    """
+
+    def __init__(self, system: Any):
+        self._system = system
+
+    def dependencies(self) -> set[Any]:
+        return set()
+
+    def start(self) -> None:
+        return None
+
+    def stop(self) -> None:
+        return None
+
+    def reset_state(self) -> None:
+        return None
+
+    def capture(self, event: Any) -> None:
+        return None
+
+
 class ChromaVectorStore:
     """Thin wrapper around Chroma collections with explicit embeddings."""
 
@@ -51,7 +79,14 @@ class ChromaVectorStore:
                 "chromadb is required for persistent vector storage. "
                 "Install RagRam with: pip install -e '.[local]'"
             ) from exc
-        return chromadb.PersistentClient(path=str(persist_directory), settings=Settings(anonymized_telemetry=False))
+        return chromadb.PersistentClient(
+            path=str(persist_directory),
+            settings=Settings(
+                anonymized_telemetry=False,
+                chroma_product_telemetry_impl="ragram.vector_store.NoOpChromaTelemetry",
+                chroma_telemetry_impl="ragram.vector_store.NoOpChromaTelemetry",
+            ),
+        )
 
     def collection(self, *, entity_id: int):
         return self.client.get_or_create_collection(

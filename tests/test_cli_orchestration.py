@@ -6,7 +6,7 @@ from typer.testing import CliRunner
 
 from ragram.cli import _normalize_login_code, app
 from ragram.config import ChannelConfig, RagRamConfig, TelegramConfig, save_config
-from ragram.models import MessageRecord
+from ragram.models import ChunkRecord, MessageRecord
 from ragram.storage import SQLiteStore
 
 runner = CliRunner()
@@ -76,6 +76,51 @@ def test_start_launches_ui_and_prints_url_when_channel_is_configured(tmp_path, m
     assert result.exit_code == 0
     assert launches[0].url == "http://localhost:8601"
     assert "Open RagRam: http://localhost:8601" in result.stdout
+
+
+def test_start_interactive_ready_index_skips_setup_and_launches_ui(tmp_path, monkeypatch):
+    home = tmp_path / "ragram-home"
+    monkeypatch.setenv("RAGRAM_HOME", str(home))
+    monkeypatch.setattr("ragram.cli._is_interactive", lambda: True)
+    config = RagRamConfig(channel=ChannelConfig(entity_id=100, title="Ready Channel", username="ready"))
+    save_config(config, home / "config.toml")
+    store = SQLiteStore(home / "data" / "ragram.sqlite")
+    store.initialize()
+    store.upsert_chunk(
+        ChunkRecord(
+            chunk_id="ready-1",
+            entity_id=100,
+            embedding_model=config.indexing.embedding_model,
+            message_id_start=1,
+            message_id_end=1,
+            date_start=datetime(2025, 1, 1, tzinfo=UTC),
+            date_end=datetime(2025, 1, 1, tzinfo=UTC),
+            text="ready context",
+            token_count=2,
+            metadata={},
+        )
+    )
+    launches = []
+
+    async def fail_setup(*args, **kwargs):
+        raise AssertionError("interactive setup should not run when local index is ready")
+
+    def fake_launch_streamlit_ui(*, paths, port):
+        from ragram.ui import build_ui_launch_plan
+
+        plan = build_ui_launch_plan(paths=paths, port=port)
+        launches.append(plan)
+        return plan
+
+    monkeypatch.setattr("ragram.cli._run_interactive_start", fail_setup)
+    monkeypatch.setattr("ragram.cli.launch_streamlit_ui", fake_launch_streamlit_ui)
+
+    result = runner.invoke(app, ["start", "--ui-port", "8602"])
+
+    assert result.exit_code == 0
+    assert launches[0].url == "http://localhost:8602"
+    assert "Existing local index found; skipping setup" in result.stdout
+    assert "Open RagRam: http://localhost:8602" in result.stdout
 
 
 def test_restart_clear_data_requires_confirmation_and_recreates_layout(tmp_path, monkeypatch):

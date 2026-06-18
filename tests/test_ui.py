@@ -7,6 +7,7 @@ from ragram.rag import GroundedAnswer
 from ragram.ui import (
     build_ui_launch_plan,
     build_ui_state,
+    first_available_port,
     render_answer_payload,
     source_label,
 )
@@ -36,6 +37,17 @@ def test_build_ui_launch_plan_uses_streamlit_localhost_and_printable_url(tmp_pat
     assert "--server.port" in plan.command
     assert "8601" in plan.command
     assert plan.environment["RAGRAM_HOME"] == str(paths.home)
+
+
+def test_first_available_port_skips_busy_ports(monkeypatch):
+    busy = {8501, 8502}
+
+    def fake_port_available(port, *, host="127.0.0.1"):
+        return port not in busy
+
+    monkeypatch.setattr("ragram.ui.port_available", fake_port_available)
+
+    assert first_available_port(8501) == 8503
 
 
 def test_build_ui_state_exposes_selected_channel_and_models(tmp_path):

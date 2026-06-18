@@ -54,6 +54,17 @@ def _is_interactive() -> bool:
     return sys.stdin.isatty()
 
 
+def _local_index_ready(config: Any, paths: Any) -> bool:
+    """Return True when `ragram start` can launch UI without guided setup."""
+
+    entity_id = config.channel.entity_id
+    if entity_id is None:
+        return False
+    store = SQLiteStore(paths.sqlite_path)
+    store.initialize()
+    return bool(store.list_chunks(entity_id=entity_id, embedding_model=config.indexing.embedding_model))
+
+
 def _load_inquirer() -> Any:
     try:
         from InquirerPy import inquirer
@@ -585,14 +596,19 @@ def start(
     console.print("Local product flow is ready; no paid APIs are configured or contacted.")
     console.print(f"App home: {plan.status.app_home}")
 
-    if config.telegram.api_id is None or not config.telegram.api_hash or not config.telegram.phone:
+    local_index_ready = _local_index_ready(config, plan.paths)
+
+    if not local_index_ready and (config.telegram.api_id is None or not config.telegram.api_hash or not config.telegram.phone):
         if not _is_interactive():
             _print_telegram_credentials_help()
             console.print("Run this command in an interactive terminal to enter them securely; api_hash/password prompts are hidden.")
 
     if _is_interactive():
-        asyncio.run(_run_interactive_start(config, plan.paths))
-        config = load_config(plan.paths.config_path)
+        if local_index_ready:
+            console.print("Existing local index found; skipping setup. Use `ragram restart --reconfigure` to change account/channel/models.")
+        else:
+            asyncio.run(_run_interactive_start(config, plan.paths))
+            config = load_config(plan.paths.config_path)
 
     if config.channel.entity_id is not None:
         console.print(f"Selected channel: {config.channel.title or config.channel.entity_id}")
@@ -608,6 +624,8 @@ def start(
         return
 
     launch_plan = launch_streamlit_ui(paths=plan.paths, port=plan.ui_port)
+    if launch_plan.port != plan.ui_port:
+        console.print(f"Port {plan.ui_port} is already in use; using {launch_plan.port} instead.")
     console.print(f"Open RagRam: {launch_plan.url}")
 
 

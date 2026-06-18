@@ -163,3 +163,5 @@ def test_persistent_chroma_client_disables_anonymized_telemetry(tmp_path, monkey
     settings = captured["client_kwargs"]["settings"]
     assert captured["client_kwargs"]["path"] == str(tmp_path)
     assert settings.kwargs["anonymized_telemetry"] is False
+    assert settings.kwargs["chroma_product_telemetry_impl"] == "ragram.vector_store.NoOpChromaTelemetry"
+    assert settings.kwargs["chroma_telemetry_impl"] == "ragram.vector_store.NoOpChromaTelemetry"

@@ -93,11 +93,28 @@ def build_grounded_prompt(*, question: str, contexts: list[RetrievalResult], top
     """Build a conservative prompt for source-grounded local answering."""
 
     context_block = build_context_block(contexts[:top_k], max_context_tokens=max_context_tokens)
+    if not _looks_english(question):
+        return f"""Ты RagRam — локальный ассистент для вопросов по Telegram-каналу.
+Строго соблюдай правила:
+- отвечай только по найденному контексту ниже;
+- если контекста недостаточно, прямо скажи: найденных сообщений недостаточно для ответа;
+- отвечай строго на русском языке;
+- сохраняй неопределённость и не выдумывай факты, даты, имена или числа;
+- при необходимости ссылайся на source id.
+
+Вопрос:
+{question}
+
+Найденный контекст:
+{context_block}
+
+Ответ на русском:"""
+
     return f"""You are RagRam, a local Telegram channel question-answering assistant.
 Use the rules below strictly:
 - answer only from the retrieved context.
 - If the context is insufficient, say that the retrieved messages do not contain enough information.
-- Answer in the language of the question.
+- Answer strictly in English.
 - Preserve uncertainty and do not invent facts, dates, names, or numbers.
 - Cite source ids naturally when useful.
 
@@ -107,7 +124,7 @@ Question:
 Retrieved context:
 {context_block}
 
-Answer:"""
+Answer in English:"""
 
 
 def _looks_english(text: str) -> bool:
