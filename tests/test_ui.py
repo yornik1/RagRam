@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import runpy
+import signal
 import subprocess
 from pathlib import Path
 
@@ -10,6 +11,8 @@ from ragram.ui import (
     build_ui_launch_plan,
     build_ui_state,
     first_available_port,
+    stop_existing_streamlit_ui,
+    ui_pid_path,
     render_answer_payload,
     source_label,
 )
@@ -110,12 +113,16 @@ def test_launch_streamlit_ui_uses_fake_popen_and_returns_url(tmp_path, monkeypat
     from ragram.ui import launch_streamlit_ui
 
     monkeypatch.setattr("ragram.ui.port_available", lambda port, *, host="127.0.0.1": True)
+    monkeypatch.setattr("ragram.ui._list_ragram_streamlit_processes", lambda: [])
     paths = app_paths(tmp_path / "home")
     calls = []
 
+    class FakeProcess:
+        pid = 12345
+
     def fake_popen(command, **kwargs):
         calls.append({"command": command, **kwargs})
-        return object()
+        return FakeProcess()
 
     plan = launch_streamlit_ui(paths=paths, port=8502, popen=fake_popen)
 
@@ -125,3 +132,44 @@ def test_launch_streamlit_ui_uses_fake_popen_and_returns_url(tmp_path, monkeypat
     assert calls[0]["stderr"] == subprocess.STDOUT
     assert calls[0]["start_new_session"] is True
     assert (paths.logs_dir / "streamlit-8502.log").exists()
+    assert ui_pid_path(paths).exists()
+    assert '"pid": 12345' in ui_pid_path(paths).read_text()
+
+
+def test_launch_streamlit_ui_stops_existing_ragram_processes(tmp_path, monkeypatch):
+    from ragram.ui import launch_streamlit_ui
+
+    monkeypatch.setattr("ragram.ui.port_available", lambda port, *, host="127.0.0.1": True)
+    monkeypatch.setattr("ragram.ui._list_ragram_streamlit_processes", lambda: [(111, 8501, "old"), (222, 8502, "old")])
+    monkeypatch.setattr("ragram.ui._process_alive", lambda pid: False)
+    killed = []
+
+    def fake_kill(pid, sig):
+        killed.append((pid, sig))
+
+    class FakeProcess:
+        pid = 333
+
+    monkeypatch.setattr("ragram.ui.os.kill", fake_kill)
+    paths = app_paths(tmp_path / "home")
+
+    launch_streamlit_ui(paths=paths, port=8501, popen=lambda command, **kwargs: FakeProcess())
+
+    assert killed == [(111, signal.SIGTERM), (222, signal.SIGTERM)]
+    assert '"pid": 333' in ui_pid_path(paths).read_text()
+
+
+def test_stop_existing_streamlit_ui_uses_live_pid_file(tmp_path, monkeypatch):
+    paths = app_paths(tmp_path / "home")
+    paths.logs_dir.mkdir(parents=True)
+    ui_pid_path(paths).write_text('{"pid": 444, "port": 8501}')
+    monkeypatch.setattr("ragram.ui._list_ragram_streamlit_processes", lambda: [])
+    monkeypatch.setattr("ragram.ui._process_alive", lambda pid: True)
+    killed = []
+    monkeypatch.setattr("ragram.ui.os.kill", lambda pid, sig: killed.append((pid, sig)))
+
+    stopped = stop_existing_streamlit_ui(paths=paths, wait_seconds=0)
+
+    assert stopped == [444]
+    assert killed == [(444, signal.SIGTERM), (444, signal.SIGKILL)]
+    assert not ui_pid_path(paths).exists()

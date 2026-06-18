@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import os
+import signal
 import socket
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
@@ -65,6 +68,101 @@ def first_available_port(start_port: int, *, host: str = "127.0.0.1", limit: int
     raise RuntimeError(f"No free local UI port found near {start_port}.")
 
 
+
+def ui_pid_path(paths: AppPaths) -> Path:
+    """Return the pid-file path for the detached local UI process."""
+
+    return paths.logs_dir / "streamlit.pid"
+
+
+def _extract_streamlit_port(command: str) -> int | None:
+    parts = command.split()
+    try:
+        index = parts.index("--server.port")
+    except ValueError:
+        return None
+    if index + 1 >= len(parts):
+        return None
+    try:
+        return int(parts[index + 1])
+    except ValueError:
+        return None
+
+
+def _list_ragram_streamlit_processes(*, app_path: Path | None = None) -> list[tuple[int, int | None, str]]:
+    """Return running RagRam Streamlit processes as (pid, port, command)."""
+
+    target = str(app_path or streamlit_app_path())
+    try:
+        result = subprocess.run(
+            ["ps", "-axo", "pid=,command="],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return []
+    processes: list[tuple[int, int | None, str]] = []
+    current_pid = os.getpid()
+    for line in result.stdout.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        pid_text, _, command = stripped.partition(" ")
+        try:
+            pid = int(pid_text)
+        except ValueError:
+            continue
+        if pid == current_pid:
+            continue
+        if " -m streamlit run " not in f" {command} " or target not in command:
+            continue
+        processes.append((pid, _extract_streamlit_port(command), command))
+    return processes
+
+
+def _process_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def stop_existing_streamlit_ui(*, paths: AppPaths, wait_seconds: float = 2.0) -> list[int]:
+    """Stop existing RagRam UI processes before starting a new one."""
+
+    stopped: list[int] = []
+    pid_file = ui_pid_path(paths)
+    candidate_pids = {pid for pid, _, _ in _list_ragram_streamlit_processes()}
+    if pid_file.exists():
+        try:
+            payload = json.loads(pid_file.read_text())
+            pid = int(payload.get("pid"))
+            if _process_alive(pid):
+                candidate_pids.add(pid)
+        except Exception:
+            pass
+    for pid in sorted(candidate_pids):
+        try:
+            os.kill(pid, signal.SIGTERM)
+            stopped.append(pid)
+        except OSError:
+            continue
+    deadline = time.monotonic() + wait_seconds
+    while time.monotonic() < deadline and any(_process_alive(pid) for pid in stopped):
+        time.sleep(0.05)
+    for pid in stopped:
+        if _process_alive(pid):
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
+    if pid_file.exists():
+        pid_file.unlink(missing_ok=True)
+    return stopped
+
+
 def streamlit_app_path() -> Path:
     """Return the package-local Streamlit app entrypoint."""
 
@@ -107,22 +205,28 @@ def build_ui_launch_plan(*, paths: AppPaths, port: int) -> UiLaunchPlan:
 
 
 def launch_streamlit_ui(*, paths: AppPaths, port: int, popen: Any = subprocess.Popen) -> UiLaunchPlan:
-    """Launch the local Streamlit UI in a detached background process."""
+    """Launch exactly one detached local Streamlit UI process."""
 
-    plan = build_ui_launch_plan(paths=paths, port=first_available_port(port))
     paths.logs_dir.mkdir(parents=True, exist_ok=True)
+    stop_existing_streamlit_ui(paths=paths)
+    plan = build_ui_launch_plan(paths=paths, port=first_available_port(port))
     log_path = paths.logs_dir / f"streamlit-{plan.port}.log"
     try:
-        log_file = log_path.open("ab")
-        popen(
-            plan.command,
-            env=plan.environment,
-            stdout=log_file,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )  # noqa: S603 - command is package-local and deterministic.
+        with log_path.open("ab") as log_file:
+            process = popen(
+                plan.command,
+                env=plan.environment,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )  # noqa: S603 - command is package-local and deterministic.
     except FileNotFoundError as exc:  # pragma: no cover - defensive around broken Python executable.
         raise RuntimeError("Could not launch Streamlit with the current Python executable.") from exc
+    pid = getattr(process, "pid", None)
+    if pid is not None:
+        ui_pid_path(paths).write_text(
+            json.dumps({"pid": pid, "port": plan.port, "url": plan.url, "command": plan.command}, ensure_ascii=False)
+        )
     return plan
 
 
