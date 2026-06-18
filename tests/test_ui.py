@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import runpy
+import subprocess
 from pathlib import Path
 
 from ragram.config import ChannelConfig, IndexingConfig, RagRamConfig, UiConfig, app_paths
@@ -25,6 +27,12 @@ def configured_app(tmp_path: Path) -> RagRamConfig:
     )
 
 
+def test_streamlit_entrypoint_imports_when_run_as_script():
+    # Streamlit executes this file by path, not as `ragram.streamlit_app`;
+    # absolute imports must work without package-relative import context.
+    runpy.run_path("src/ragram/streamlit_app.py", run_name="streamlit_app_test")
+
+
 def test_build_ui_launch_plan_uses_streamlit_localhost_and_printable_url(tmp_path):
     paths = app_paths(tmp_path / "home")
 
@@ -36,6 +44,8 @@ def test_build_ui_launch_plan_uses_streamlit_localhost_and_printable_url(tmp_pat
     assert str(plan.app_module_path).endswith("streamlit_app.py")
     assert "--server.port" in plan.command
     assert "8601" in plan.command
+    assert "--server.fileWatcherType" in plan.command
+    assert "none" in plan.command
     assert plan.environment["RAGRAM_HOME"] == str(paths.home)
 
 
@@ -96,14 +106,15 @@ def test_render_answer_payload_hides_or_shows_raw_context():
     assert shown["raw_context"] == "сырой контекст"
 
 
-def test_launch_streamlit_ui_uses_fake_popen_and_returns_url(tmp_path):
+def test_launch_streamlit_ui_uses_fake_popen_and_returns_url(tmp_path, monkeypatch):
     from ragram.ui import launch_streamlit_ui
 
+    monkeypatch.setattr("ragram.ui.port_available", lambda port, *, host="127.0.0.1": True)
     paths = app_paths(tmp_path / "home")
     calls = []
 
-    def fake_popen(command, env):
-        calls.append({"command": command, "env": env})
+    def fake_popen(command, **kwargs):
+        calls.append({"command": command, **kwargs})
         return object()
 
     plan = launch_streamlit_ui(paths=paths, port=8502, popen=fake_popen)
@@ -111,3 +122,6 @@ def test_launch_streamlit_ui_uses_fake_popen_and_returns_url(tmp_path):
     assert plan.url == "http://localhost:8502"
     assert calls[0]["command"] == plan.command
     assert calls[0]["env"]["RAGRAM_HOME"] == str(paths.home)
+    assert calls[0]["stderr"] == subprocess.STDOUT
+    assert calls[0]["start_new_session"] is True
+    assert (paths.logs_dir / "streamlit-8502.log").exists()

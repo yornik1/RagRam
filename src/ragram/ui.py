@@ -91,6 +91,8 @@ def build_ui_launch_plan(*, paths: AppPaths, port: int) -> UiLaunchPlan:
         "false",
         "--server.headless",
         "true",
+        "--server.fileWatcherType",
+        "none",
     ]
     environment = dict(os.environ)
     environment["RAGRAM_HOME"] = str(paths.home)
@@ -105,11 +107,20 @@ def build_ui_launch_plan(*, paths: AppPaths, port: int) -> UiLaunchPlan:
 
 
 def launch_streamlit_ui(*, paths: AppPaths, port: int, popen: Any = subprocess.Popen) -> UiLaunchPlan:
-    """Launch the local Streamlit UI in a background process and return its URL plan."""
+    """Launch the local Streamlit UI in a detached background process."""
 
     plan = build_ui_launch_plan(paths=paths, port=first_available_port(port))
+    paths.logs_dir.mkdir(parents=True, exist_ok=True)
+    log_path = paths.logs_dir / f"streamlit-{plan.port}.log"
     try:
-        popen(plan.command, env=plan.environment)  # noqa: S603 - command is package-local and deterministic.
+        log_file = log_path.open("ab")
+        popen(
+            plan.command,
+            env=plan.environment,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )  # noqa: S603 - command is package-local and deterministic.
     except FileNotFoundError as exc:  # pragma: no cover - defensive around broken Python executable.
         raise RuntimeError("Could not launch Streamlit with the current Python executable.") from exc
     return plan

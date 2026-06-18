@@ -6,12 +6,12 @@ providers, and renders question answering over the selected Telegram channel.
 
 from __future__ import annotations
 
-from .config import app_paths, load_config
-from .embeddings import SentenceTransformerEmbeddingProvider
-from .llm import ANSWER_MODEL_CHOICES, OllamaClient
-from .rag import RagService
-from .ui import DEFAULT_TOP_K, MAX_TOP_K, MIN_TOP_K, build_ui_state, render_answer_payload, source_label
-from .vector_store import ChromaVectorStore
+from ragram.config import app_paths, load_config
+from ragram.embeddings import SentenceTransformerEmbeddingProvider
+from ragram.llm import ANSWER_MODEL_CHOICES, OllamaClient
+from ragram.rag import RagService
+from ragram.ui import DEFAULT_TOP_K, MAX_TOP_K, MIN_TOP_K, build_ui_state, render_answer_payload, source_label
+from ragram.vector_store import ChromaVectorStore
 
 
 def _provider_error_message(exc: Exception) -> str:
