@@ -12,9 +12,10 @@ from ragram.vector_store import RetrievalResult
 
 
 class FakeResponse:
-    def __init__(self, payload, status_code=200):
+    def __init__(self, payload, status_code=200, lines=None):
         self.payload = payload
         self.status_code = status_code
+        self.lines = lines or []
 
     def raise_for_status(self):
         if self.status_code >= 400:
@@ -23,11 +24,16 @@ class FakeResponse:
     def json(self):
         return self.payload
 
+    def iter_lines(self, decode_unicode=False):
+        for line in self.lines:
+            yield line if decode_unicode else line.encode("utf-8")
+
 
 class FakeSession:
     def __init__(self):
         self.get_payload = {"models": []}
         self.post_payload = {"response": "Ответ", "eval_count": 20, "eval_duration": 2_000_000_000}
+        self.stream_lines = []
         self.get_calls = []
         self.post_calls = []
 
@@ -35,8 +41,10 @@ class FakeSession:
         self.get_calls.append((url, timeout))
         return FakeResponse(self.get_payload)
 
-    def post(self, url, json, timeout):
-        self.post_calls.append((url, json, timeout))
+    def post(self, url, json, timeout, stream=False):
+        self.post_calls.append((url, json, timeout, stream))
+        if stream:
+            return FakeResponse({}, lines=self.stream_lines)
         return FakeResponse(self.post_payload)
 
 
@@ -51,13 +59,19 @@ class FakeRetriever:
 
 
 class FakeLLM:
-    def __init__(self, answer="Согласно источникам, проект локальный."):
+    def __init__(self, answer="Согласно источникам, проект локальный.", chunks=None):
         self.answer = answer
+        self.chunks = chunks or [answer]
         self.prompts = []
+        self.stream_prompts = []
 
     def generate(self, *, model, prompt):
         self.prompts.append({"model": model, "prompt": prompt})
         return self.answer
+
+    def generate_stream(self, *, model, prompt):
+        self.stream_prompts.append({"model": model, "prompt": prompt})
+        yield from self.chunks
 
 
 def retrieval(chunk_id="c1", text="RagRam хранит данные локально."):
@@ -107,6 +121,29 @@ def test_ollama_generate_uses_non_streaming_api_and_returns_text():
             "http://localhost:11434/api/generate",
             {"model": "qwen3:4b", "prompt": "Answer from context", "stream": False},
             120,
+            False,
+        )
+    ]
+
+
+def test_ollama_generate_stream_yields_response_chunks_from_json_lines():
+    session = FakeSession()
+    session.stream_lines = [
+        '{"response": "При", "done": false}',
+        '{"response": "вет", "done": false}',
+        '{"done": true}',
+    ]
+    client = OllamaClient(base_url="http://localhost:11434", session=session)
+
+    chunks = list(client.generate_stream(model="qwen3:4b", prompt="Answer from context"))
+
+    assert chunks == ["При", "вет"]
+    assert session.post_calls == [
+        (
+            "http://localhost:11434/api/generate",
+            {"model": "qwen3:4b", "prompt": "Answer from context", "stream": True},
+            120,
+            True,
         )
     ]
 
@@ -157,6 +194,21 @@ def test_rag_service_retrieves_top_k_and_returns_grounded_answer_with_sources():
     assert retriever.calls == [{"entity_id": 100, "query": "Почему это локально?", "top_k": 3}]
     assert llm.prompts[0]["model"] == "qwen3:4b"
     assert "Почему это локально?" in llm.prompts[0]["prompt"]
+
+
+def test_rag_service_streams_answer_chunks_with_sources_and_context():
+    retriever = FakeRetriever([retrieval()])
+    llm = FakeLLM(chunks=["Согласно ", "источникам"])
+    service = RagService(retriever=retriever, llm=llm, entity_id=100, answer_model="qwen3:4b")
+
+    streamed = service.answer_stream("Почему это локально?", top_k=3)
+
+    assert streamed.sources[0]["message_id_start"] == 10
+    assert "RagRam хранит данные локально" in streamed.raw_context
+    assert list(streamed.answer_chunks) == ["Согласно ", "источникам"]
+    assert retriever.calls == [{"entity_id": 100, "query": "Почему это локально?", "top_k": 3}]
+    assert llm.stream_prompts[0]["model"] == "qwen3:4b"
+    assert "Почему это локально?" in llm.stream_prompts[0]["prompt"]
 
 
 def test_rag_service_short_circuits_when_no_context():

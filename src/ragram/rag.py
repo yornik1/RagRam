@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Iterable, Protocol
 
 from .llm import LLMProvider
 from .vector_store import RetrievalResult
@@ -33,6 +33,15 @@ class GroundedAnswer:
     """Answer plus source metadata shown in the UI."""
 
     answer: str
+    sources: list[dict]
+    raw_context: str = ""
+
+
+@dataclass(frozen=True)
+class GroundedStream:
+    """Streaming answer chunks plus source metadata shown in the UI."""
+
+    answer_chunks: Iterable[str]
     sources: list[dict]
     raw_context: str = ""
 
@@ -159,6 +168,26 @@ class RagService:
         answer = self.llm.generate(model=self.answer_model, prompt=prompt)
         return GroundedAnswer(
             answer=answer,
+            sources=format_sources(contexts),
+            raw_context=build_context_block(contexts, max_context_tokens=context_budget_for_model(self.answer_model)),
+        )
+
+    def answer_stream(self, question: str, *, top_k: int = 8) -> GroundedStream:
+        """Stream a grounded answer while preserving sources and raw context."""
+
+        contexts = self.retriever.query(entity_id=self.entity_id, query=question, top_k=top_k)
+        if not contexts:
+            message = INSUFFICIENT_CONTEXT_EN if _looks_english(question) else INSUFFICIENT_CONTEXT_RU
+            return GroundedStream(answer_chunks=iter([message]), sources=[])
+
+        prompt = build_grounded_prompt(
+            question=question,
+            contexts=contexts,
+            top_k=top_k,
+            max_context_tokens=context_budget_for_model(self.answer_model),
+        )
+        return GroundedStream(
+            answer_chunks=self.llm.generate_stream(model=self.answer_model, prompt=prompt),
             sources=format_sources(contexts),
             raw_context=build_context_block(contexts, max_context_tokens=context_budget_for_model(self.answer_model)),
         )

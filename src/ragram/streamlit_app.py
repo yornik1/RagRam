@@ -10,7 +10,7 @@ from ragram.config import app_paths, load_config
 from ragram.embeddings import SentenceTransformerEmbeddingProvider
 from ragram.llm import ANSWER_MODEL_CHOICES, OllamaClient
 from ragram.rag import RagService
-from ragram.ui import DEFAULT_TOP_K, MAX_TOP_K, MIN_TOP_K, build_ui_state, render_answer_payload, source_label
+from ragram.ui import DEFAULT_TOP_K, MAX_TOP_K, MIN_TOP_K, build_ui_state, source_label
 from ragram.vector_store import ChromaVectorStore
 
 
@@ -62,7 +62,9 @@ def main() -> None:  # pragma: no cover - rendered by Streamlit, unit-tested thr
         st.info("Ask a question to retrieve local Telegram context and generate a grounded answer.")
         return
 
+    status = st.status("Starting local RAG pipeline…", expanded=True)
     try:
+        status.write("Loading local embedding model and opening Chroma index…")
         embedding_provider = SentenceTransformerEmbeddingProvider(state.embedding_model)
         vector_store = ChromaVectorStore(embedding_provider=embedding_provider, persist_directory=paths.chroma_dir)
         service = RagService(
@@ -71,25 +73,34 @@ def main() -> None:  # pragma: no cover - rendered by Streamlit, unit-tested thr
             entity_id=state.entity_id,
             answer_model=answer_model,
         )
-        grounded = service.answer(question.strip(), top_k=top_k)
+        status.write(f"Retrieving top {top_k} chunks from the local Telegram index…")
+        grounded = service.answer_stream(question.strip(), top_k=top_k)
     except Exception as exc:
+        status.update(label="Local RAG pipeline failed", state="error")
         st.error(_provider_error_message(exc))
         return
 
-    payload = render_answer_payload(grounded, show_raw_context=show_raw_context)
+    sources = grounded.sources
     st.subheader("Answer")
-    st.write(payload["answer"])
+    if sources:
+        status.update(label="Streaming answer from local Ollama…", state="running", expanded=True)
+        st.caption("Generating locally with Ollama… answer text appears as soon as tokens arrive.")
+        st.write_stream(grounded.answer_chunks)
+        status.update(label="Answer generated", state="complete", expanded=False)
+    else:
+        st.write("".join(grounded.answer_chunks))
+        status.update(label="No relevant chunks found", state="complete", expanded=False)
 
     st.subheader("Sources")
-    if not payload["sources"]:
+    if not sources:
         st.write("No sources returned.")
-    for index, source in enumerate(payload["sources"], start=1):
+    for index, source in enumerate(sources, start=1):
         with st.expander(f"{index}. {source_label(source)}", expanded=index <= 3):
             st.json(source)
 
-    if payload["raw_context"]:
+    if show_raw_context and grounded.raw_context:
         st.subheader("Raw context")
-        st.text(payload["raw_context"])
+        st.text(grounded.raw_context)
 
 
 if __name__ == "__main__":  # pragma: no cover

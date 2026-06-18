@@ -7,8 +7,9 @@ question answering on the user's machine.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
-from typing import Any, Iterable, Protocol
+from typing import Any, Iterable, Iterator, Protocol
 
 import requests
 
@@ -23,6 +24,10 @@ class LLMProvider(Protocol):
 
     def generate(self, *, model: str, prompt: str) -> str:
         """Generate a non-streaming answer from a local model."""
+        ...
+
+    def generate_stream(self, *, model: str, prompt: str) -> Iterable[str]:
+        """Generate answer chunks from a local model."""
         ...
 
 
@@ -93,3 +98,23 @@ class OllamaClient:
         response.raise_for_status()
         payload = response.json()
         return str(payload.get("response", "")).strip()
+
+    def generate_stream(self, *, model: str, prompt: str) -> Iterator[str]:
+        """Generate answer chunks from Ollama's JSONL streaming API."""
+
+        response = self.session.post(
+            f"{self.base_url}/api/generate",
+            json={"model": model, "prompt": prompt, "stream": True},
+            timeout=self.generate_timeout,
+            stream=True,
+        )
+        response.raise_for_status()
+        for line in response.iter_lines(decode_unicode=True):
+            if not line:
+                continue
+            payload = json.loads(line)
+            chunk = payload.get("response")
+            if chunk:
+                yield str(chunk)
+            if payload.get("done"):
+                break
