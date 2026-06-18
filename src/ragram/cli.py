@@ -408,7 +408,11 @@ async def _run_interactive_start(config, paths) -> None:
         if not dialogs:
             raise typer.BadParameter("No accessible Telegram channels/groups were found for this account.")
 
-        query = await _prompt_value(inquirer.text(message="Filter channels/groups by title (optional):", default=""))
+        console.print("Now choose one Telegram channel/group to index.")
+        console.print("Press Enter at the filter prompt to show the most recently active channels/groups.")
+        query = await _prompt_value(
+            inquirer.text(message="Filter channels/groups by title (optional; press Enter to show all):", default="")
+        )
         visible_dialogs = _filter_dialog_choices(dialogs, str(query))
         if not visible_dialogs:
             console.print("No matching dialogs; showing the recent list instead.")

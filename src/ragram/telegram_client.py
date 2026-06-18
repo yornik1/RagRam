@@ -8,6 +8,7 @@ are needed.
 from __future__ import annotations
 
 import inspect
+import asyncio
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime
@@ -293,22 +294,37 @@ async def ensure_telegram_qr_login(
 
     try:
         qr_login = await client.qr_login()
-        callback_result = qr_callback(
-            QRLoginChallenge(url=str(qr_login.url), expires_at=getattr(qr_login, "expires", None))
-        )
-        if inspect.isawaitable(callback_result):
-            await callback_result
-
+        deadline = None
+        if timeout_seconds is not None:
+            deadline = _event_loop_time() + timeout_seconds
         password_errors = password_needed_error_types or _default_password_error_types()
-        try:
-            await qr_login.wait(timeout=timeout_seconds)
-            return LoginResult(reused_session=False)
-        except password_errors:  # type: ignore[misc]
-            password = password_callback()
-            if inspect.isawaitable(password):
-                password = await password
-            await client.sign_in(password=password)
-            return LoginResult(reused_session=False, required_2fa=True)
+        while True:
+            callback_result = qr_callback(
+                QRLoginChallenge(url=str(qr_login.url), expires_at=getattr(qr_login, "expires", None))
+            )
+            if inspect.isawaitable(callback_result):
+                await callback_result
+
+            wait_timeout = _qr_wait_timeout(getattr(qr_login, "expires", None), deadline)
+            if wait_timeout is not None and wait_timeout <= 0:
+                if _qr_expired(getattr(qr_login, "expires", None)) and (deadline is None or _event_loop_time() < deadline):
+                    await _recreate_qr_login(qr_login)
+                    continue
+                raise TelegramQRLoginTimeout("Telegram QR login timed out. Run ragram start again and scan the new QR code.")
+            try:
+                await qr_login.wait(timeout=wait_timeout)
+                return LoginResult(reused_session=False)
+            except password_errors:  # type: ignore[misc]
+                password = password_callback()
+                if inspect.isawaitable(password):
+                    password = await password
+                await client.sign_in(password=password)
+                return LoginResult(reused_session=False, required_2fa=True)
+            except TimeoutError as exc:
+                if _qr_expired(getattr(qr_login, "expires", None)) and (deadline is None or _event_loop_time() < deadline):
+                    await _recreate_qr_login(qr_login)
+                    continue
+                raise TelegramQRLoginTimeout("Telegram QR login timed out. Run ragram start again and scan the new QR code.") from exc
     except TimeoutError as exc:
         raise TelegramQRLoginTimeout("Telegram QR login timed out. Run ragram start again and scan the new QR code.") from exc
     except TelegramQRLoginTimeout:
@@ -317,6 +333,46 @@ async def ensure_telegram_qr_login(
         if _is_flood_wait(exc):
             _raise_domain_flood_wait(exc, "qr_login")
         raise TelegramQRLoginFailed(f"Telegram QR login failed: {exc}") from exc
+
+
+def _event_loop_time() -> float:
+    try:
+        return asyncio.get_running_loop().time()
+    except RuntimeError:  # pragma: no cover - ensure_telegram_qr_login always runs in a loop.
+        return 0.0
+
+
+async def _recreate_qr_login(qr_login: Any) -> None:
+    recreate = getattr(qr_login, "recreate", None)
+    if recreate is None:
+        raise TelegramQRLoginTimeout("Telegram QR login expired and this Telethon QR object cannot refresh it.")
+    recreate_result = recreate()
+    if inspect.isawaitable(recreate_result):
+        await recreate_result
+
+
+def _seconds_until_datetime(value: Any) -> float | None:
+    if not isinstance(value, datetime):
+        return None
+    now = datetime.now(value.tzinfo) if value.tzinfo is not None else datetime.now()
+    return (value - now).total_seconds()
+
+
+def _qr_expired(expires_at: Any) -> bool:
+    remaining = _seconds_until_datetime(expires_at)
+    return remaining is not None and remaining <= 1.0
+
+
+def _qr_wait_timeout(expires_at: Any, deadline: float | None) -> float | None:
+    timeouts: list[float] = []
+    qr_remaining = _seconds_until_datetime(expires_at)
+    if qr_remaining is not None:
+        timeouts.append(max(qr_remaining, 0.0))
+    if deadline is not None:
+        timeouts.append(max(deadline - _event_loop_time(), 0.0))
+    if not timeouts:
+        return None
+    return min(timeouts)
 
 
 def _entity_kind(dialog: Any, entity: Any) -> str | None:

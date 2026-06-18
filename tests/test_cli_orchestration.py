@@ -178,7 +178,7 @@ def test_start_interactive_first_run_with_fakes_configures_channel_and_models(tm
             values = {
                 "Telegram api_id (digits only):": "12345",
                 "Telegram phone number (international format, e.g. +15551234567):": "+15550000000",
-                "Filter channels/groups by title (optional):": "python",
+                "Filter channels/groups by title (optional; press Enter to show all):": "python",
                 "How many recent messages?": "25",
             }
             return Prompt(values.get(message, default or ""), message=message)
@@ -276,7 +276,7 @@ def test_start_can_reenter_saved_telegram_credentials_before_login(tmp_path, mon
             values = {
                 "Telegram api_id (digits only):": "222",
                 "Telegram phone number (international format, e.g. +15551234567):": "+15551234567",
-                "Filter channels/groups by title (optional):": "",
+                "Filter channels/groups by title (optional; press Enter to show all):": "",
                 "How many recent messages?": "10",
             }
             return Prompt(values.get(message, default or ""))
@@ -362,7 +362,7 @@ def test_start_qr_login_does_not_require_phone_number(tmp_path, monkeypatch):
         def text(self, *, message, default=None):
             values = {
                 "Telegram api_id (digits only):": "222",
-                "Filter channels/groups by title (optional):": "",
+                "Filter channels/groups by title (optional; press Enter to show all):": "",
                 "How many recent messages?": "10",
             }
             if message == "Telegram phone number (international format, e.g. +15551234567):":

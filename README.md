@@ -81,7 +81,7 @@ Interactive `start` will:
 3. If no Telegram session exists, ask how to login:
    - `Login by QR code (recommended)`
    - `Login by Telegram app code`
-4. For QR login, save a real PNG QR image at `~/.ragram/qr-login.png` and open it automatically on macOS. Scan that image from Telegram mobile: `Settings → Devices → Link Desktop Device`.
+4. For QR login, save a real PNG QR image at `~/.ragram/qr-login.png` and open it automatically on macOS. Scan that image from Telegram mobile: `Settings → Devices → Link Desktop Device`. If Telegram expires the token before scan, RagRam rewrites the PNG with a fresh QR until the login timeout.
 5. For code login, ask for phone number and the short numeric Telegram login code.
 6. Support 2FA password when Telegram requires it.
 7. Save the Telethon session locally and reuse it on the next `ragram start`.
@@ -112,7 +112,7 @@ ragram restart --clear-data
 
 - On macOS, use `python3`, not `python`, if `python` is not installed.
 - Run `ragram start` from a real interactive terminal. The first run needs secure prompts for Telegram credentials and login code.
-- Prefer `Login by QR code (recommended)`. RagRam writes `~/.ragram/qr-login.png`; if it does not open automatically, run `open ~/.ragram/qr-login.png` and scan the image from Telegram mobile via `Settings → Devices → Link Desktop Device`.
+- Prefer `Login by QR code (recommended)`. RagRam writes `~/.ragram/qr-login.png`; if it does not open automatically, run `open ~/.ragram/qr-login.png` and scan the image from Telegram mobile via `Settings → Devices → Link Desktop Device`. If the terminal prints a new QR expiration time, reopen or rescan `~/.ragram/qr-login.png`.
 - The Telegram login code is normally sent inside Telegram to an already logged-in app/session, often as a service chat or login notification. It is not shown in RagRam and may not arrive as SMS.
 - This login code is a short numeric Telegram app login code, for example 5 digits. It is not the alphanumeric confirmation code from `my.telegram.org/apps`.
 - At the `Telegram login code` prompt, type `r` to request a new code or `q` to quit and re-check the saved phone/API credentials.

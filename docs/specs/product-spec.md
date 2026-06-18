@@ -46,7 +46,7 @@ ragram start --ui-port 8501
    - ask for `api_id`;
    - ask for `api_hash` without echoing it;
    - if no session exists, offer login methods with QR first: `Login by QR code (recommended)` or `Login by Telegram app code`;
-   - for QR login, save a scannable PNG at `~/.ragram/qr-login.png`, open it automatically on macOS when possible, and wait for scan from Telegram mobile/Desktop;
+   - for QR login, save a scannable PNG at `~/.ragram/qr-login.png`, open it automatically on macOS when possible, refresh the PNG if the Telegram token expires before the overall login timeout, and wait for scan from Telegram mobile/Desktop;
    - for code login, ask for phone number and the short numeric Telegram app login code;
    - ask for 2FA password without echoing it when needed;
    - store config and reuse the Telethon session on later runs.

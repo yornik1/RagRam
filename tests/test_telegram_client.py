@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -110,19 +110,29 @@ class FakeClient:
 
 
 class FakeQRLogin:
-    def __init__(self, *, fail_timeout: bool = False):
-        from datetime import UTC, datetime
-
+    def __init__(self, *, fail_timeout: bool = False, expired_once: bool = False):
         self.url = "tg://login?token=fake"
-        self.expires = datetime(2026, 1, 1, tzinfo=UTC)
+        self.expires = datetime.now(UTC) + timedelta(minutes=5)
         self.wait_calls = []
         self.fail_timeout = fail_timeout
+        self.expired_once = expired_once
+        self.recreate_calls = 0
+        if expired_once:
+            self.url = "tg://login?token=expired"
+            self.expires = datetime.now(UTC) - timedelta(seconds=1)
 
     async def wait(self, timeout=None):
         self.wait_calls.append(timeout)
-        if self.fail_timeout:
+        if self.fail_timeout or self.expired_once:
+            self.expired_once = False
             raise TimeoutError()
         return type("User", (), {"id": 42})()
+
+    async def recreate(self):
+        self.recreate_calls += 1
+        self.expired_once = False
+        self.url = "tg://login?token=fresh"
+        self.expires = datetime.now(UTC) + timedelta(minutes=5)
 
 
 class FakeQRClient(FakeClient):
@@ -361,7 +371,31 @@ def test_qr_login_displays_challenge_and_waits_for_scan():
         assert client.connected is True
         assert client.qr_login_calls == 1
         assert challenges[0].url == "tg://login?token=fake"
-        assert qr.wait_calls == [123]
+        assert qr.wait_calls[0] == pytest.approx(123, abs=0.1)
+
+    asyncio.run(scenario())
+
+
+def test_qr_login_refreshes_expired_qr_before_total_timeout():
+    async def scenario():
+        qr = FakeQRLogin(expired_once=True)
+        client = FakeQRClient(qr_login=qr)
+        challenges = []
+
+        result = await ensure_telegram_qr_login(
+            client,
+            qr_callback=challenges.append,
+            password_callback=lambda: "2fa",
+            timeout_seconds=30,
+        )
+
+        assert result.reused_session is False
+        assert qr.recreate_calls == 1
+        assert [challenge.url for challenge in challenges] == [
+            "tg://login?token=expired",
+            "tg://login?token=fresh",
+        ]
+        assert len(qr.wait_calls) == 1
 
     asyncio.run(scenario())
 
