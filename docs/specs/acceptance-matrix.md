@@ -4,7 +4,8 @@
 | --- | --- | --- |
 | `pip install -e .` works | G002 | Run install in repo and import package. |
 | `ragram start` works | G002, G011 | CLI smoke test with faked integrations. |
-| First run asks Telegram credentials interactively | G004 | CLI test with mocked prompts and Telethon fake. |
+| First run asks Telegram API credentials interactively | G004 | CLI test with mocked prompts and Telethon fake. |
+| First run offers QR login before Telegram code login | G004 | CLI QR-login test with fake QR challenge. |
 | `api_hash` is not echoed | G003, G004 | Prompt uses password/secret input path; tests assert prompt type. |
 | Telegram session stored/reused | G004 | Fake session exists path skips login. |
 | Accessible channels/groups listed by recency | G004 | Dialog fake sorted by last date. |

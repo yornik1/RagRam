@@ -44,7 +44,8 @@ The requested flat module layout is preserved for the MVP. If files become too l
 ```text
 ragram start
   -> config/bootstrap ~/.ragram
-  -> Telegram login/session check
+  -> Telegram API config + login/session check
+     -> QR login recommended, code login fallback
   -> dialog discovery and channel selection
   -> indexing scope/model prompts
   -> Telethon message iterator
@@ -190,7 +191,8 @@ ollama pull qwen3:8b
 ## Telegram login limitations
 
 - Telegram API credentials (`api_id`, `api_hash`) must be created by the user at Telegram's developer portal; RagRam cannot generate them.
-- Telegram login may require an SMS/app code and possibly a 2FA password.
+- Telegram QR login requires scanning from an already logged-in Telegram app and is preferred for desktop CLI UX.
+- Telegram code login may require a short numeric app code and possibly a 2FA password; Telegram may refuse immediate resends.
 - FloodWait exceptions must be respected by sleeping or stopping safely; bypassing rate limits is not allowed.
 - Some private groups/channels may not expose message links or sender details.
 - Access is limited to what the user's Telegram account can access.

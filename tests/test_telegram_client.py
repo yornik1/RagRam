@@ -10,10 +10,12 @@ from ragram.telegram_client import (
     TelegramLoginCodeInvalid,
     TelegramLoginCodeRequestFailed,
     TelegramLoginCodeResendRequested,
+    TelegramQRLoginTimeout,
     TelegramDialog,
     TelegramFloodWait,
     describe_login_code_delivery,
     ensure_telegram_login,
+    ensure_telegram_qr_login,
     filter_dialogs,
     list_accessible_dialogs,
     normalize_entity_input,
@@ -94,6 +96,9 @@ class FakeClient:
         self.authorized = True
         return type("User", (), {"id": 42})()
 
+    async def qr_login(self, ignored_ids=None):
+        return FakeQRLogin()
+
     def iter_dialogs(self, **kwargs):
         if self.flood_wait is not None:
             raise self.flood_wait
@@ -102,6 +107,33 @@ class FakeClient:
     async def get_entity(self, value):
         self.get_entity_calls.append(value)
         return self.entity
+
+
+class FakeQRLogin:
+    def __init__(self, *, fail_timeout: bool = False):
+        from datetime import UTC, datetime
+
+        self.url = "tg://login?token=fake"
+        self.expires = datetime(2026, 1, 1, tzinfo=UTC)
+        self.wait_calls = []
+        self.fail_timeout = fail_timeout
+
+    async def wait(self, timeout=None):
+        self.wait_calls.append(timeout)
+        if self.fail_timeout:
+            raise TimeoutError()
+        return type("User", (), {"id": 42})()
+
+
+class FakeQRClient(FakeClient):
+    def __init__(self, *, authorized=False, qr_login=None):
+        super().__init__(authorized=authorized)
+        self.qr_login_obj = qr_login or FakeQRLogin()
+        self.qr_login_calls = 0
+
+    async def qr_login(self, ignored_ids=None):
+        self.qr_login_calls += 1
+        return self.qr_login_obj
 
 
 class FakeAsyncIter:
@@ -308,6 +340,43 @@ def test_login_send_code_flood_wait_is_domain_flood_wait():
 
         assert raised.value.seconds == 42
         assert raised.value.operation == "send_login_code"
+
+    asyncio.run(scenario())
+
+
+def test_qr_login_displays_challenge_and_waits_for_scan():
+    async def scenario():
+        qr = FakeQRLogin()
+        client = FakeQRClient(qr_login=qr)
+        challenges = []
+
+        result = await ensure_telegram_qr_login(
+            client,
+            qr_callback=challenges.append,
+            password_callback=lambda: "2fa",
+            timeout_seconds=123,
+        )
+
+        assert result.reused_session is False
+        assert client.connected is True
+        assert client.qr_login_calls == 1
+        assert challenges[0].url == "tg://login?token=fake"
+        assert qr.wait_calls == [123]
+
+    asyncio.run(scenario())
+
+
+def test_qr_login_timeout_is_domain_error():
+    async def scenario():
+        client = FakeQRClient(qr_login=FakeQRLogin(fail_timeout=True))
+
+        with pytest.raises(TelegramQRLoginTimeout):
+            await ensure_telegram_qr_login(
+                client,
+                qr_callback=lambda challenge: None,
+                password_callback=lambda: "2fa",
+                timeout_seconds=1,
+            )
 
     asyncio.run(scenario())
 

@@ -36,6 +36,8 @@ class TelegramClientProtocol(Protocol):
 
     async def sign_in(self, **kwargs: Any) -> Any: ...
 
+    async def qr_login(self, ignored_ids: list[int] | None = None) -> Any: ...
+
     def iter_dialogs(self, **kwargs: Any) -> Any: ...
 
     async def get_entity(self, value: Any) -> Any: ...
@@ -58,6 +60,14 @@ class LoginCodeDelivery:
     next_method: str | None = None
     timeout_seconds: int | None = None
     code_length: int | None = None
+
+
+@dataclass(frozen=True)
+class QRLoginChallenge:
+    """Safe, user-displayable details about a Telegram QR login request."""
+
+    url: str
+    expires_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -114,6 +124,14 @@ class TelegramLoginCodeRequestFailed(RuntimeError):
         else:
             message = f"Telegram could not {operation.replace('_', ' ')}: {self.original_message}"
         super().__init__(message)
+
+
+class TelegramQRLoginTimeout(RuntimeError):
+    """Raised when QR login was not completed before timeout/expiry."""
+
+
+class TelegramQRLoginFailed(RuntimeError):
+    """Raised when QR login fails for a non-timeout reason."""
 
 
 def create_telegram_client(config: TelegramConfig, paths: AppPaths) -> Any:
@@ -257,6 +275,48 @@ async def ensure_telegram_login(
             return LoginResult(reused_session=False, required_2fa=True)
 
     raise TelegramLoginCodeInvalid("Telegram login code was invalid or expired.")
+
+
+async def ensure_telegram_qr_login(
+    client: TelegramClientProtocol,
+    *,
+    qr_callback: Callable[[QRLoginChallenge], Any | Awaitable[Any]],
+    password_callback: Callable[[], str | Awaitable[str]],
+    password_needed_error_types: tuple[type[BaseException], ...] | None = None,
+    timeout_seconds: float | None = None,
+) -> LoginResult:
+    """Connect and authorize a Telegram user session using QR login."""
+
+    await client.connect()
+    if await client.is_user_authorized():
+        return LoginResult(reused_session=True)
+
+    try:
+        qr_login = await client.qr_login()
+        callback_result = qr_callback(
+            QRLoginChallenge(url=str(qr_login.url), expires_at=getattr(qr_login, "expires", None))
+        )
+        if inspect.isawaitable(callback_result):
+            await callback_result
+
+        password_errors = password_needed_error_types or _default_password_error_types()
+        try:
+            await qr_login.wait(timeout=timeout_seconds)
+            return LoginResult(reused_session=False)
+        except password_errors:  # type: ignore[misc]
+            password = password_callback()
+            if inspect.isawaitable(password):
+                password = await password
+            await client.sign_in(password=password)
+            return LoginResult(reused_session=False, required_2fa=True)
+    except TimeoutError as exc:
+        raise TelegramQRLoginTimeout("Telegram QR login timed out. Run ragram start again and scan the new QR code.") from exc
+    except TelegramQRLoginTimeout:
+        raise
+    except Exception as exc:
+        if _is_flood_wait(exc):
+            _raise_domain_flood_wait(exc, "qr_login")
+        raise TelegramQRLoginFailed(f"Telegram QR login failed: {exc}") from exc
 
 
 def _entity_kind(dialog: Any, entity: Any) -> str | None:

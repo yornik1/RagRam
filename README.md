@@ -77,14 +77,20 @@ ragram start
 Interactive `start` will:
 
 1. Create local folders and config under `~/.ragram/`.
-2. Ask for Telegram `api_id`, hidden `api_hash`, and phone number if missing.
-3. Login through Telethon, including login code and 2FA password when Telegram requires it.
-4. List accessible channels/groups by recent activity and allow custom username/URL/title/entity id input.
-5. Ask indexing scope: last N (default 1000), all, from year, or from exact date.
-6. Ask embedding, answer, and summarization model choices.
-7. Store raw messages in SQLite before embedding.
-8. Chunk, embed, and write vectors to Chroma.
-9. Launch Streamlit and print a local URL, for example:
+2. Ask for Telegram `api_id` and hidden `api_hash` if missing.
+3. If no Telegram session exists, ask how to login:
+   - `Login by QR code (recommended)`
+   - `Login by Telegram app code`
+4. For QR login, show an ASCII QR code in the terminal. Scan it from Telegram mobile: `Settings → Devices → Link Desktop Device`.
+5. For code login, ask for phone number and the short numeric Telegram login code.
+6. Support 2FA password when Telegram requires it.
+7. Save the Telethon session locally and reuse it on the next `ragram start`.
+8. List accessible channels/groups by recent activity and allow custom username/URL/title/entity id input.
+9. Ask indexing scope: last N (default 1000), all, from year, or from exact date.
+10. Ask embedding, answer, and summarization model choices.
+11. Store raw messages in SQLite before embedding.
+12. Chunk, embed, and write vectors to Chroma.
+13. Launch Streamlit and print a local URL, for example:
 
 ```text
 Open RagRam: http://localhost:8501

@@ -74,8 +74,8 @@ This plan decomposes the MVP into simple, sequential Ultragoal stories. Each sto
 **Steps:**
 
 1. Wrap Telethon client creation around configured `api_id`, `api_hash`, and session path.
-2. Implement interactive credential collection with hidden `api_hash` and hidden 2FA password.
-3. Implement login flow for code and 2FA paths.
+2. Implement interactive API credential collection with hidden `api_hash`.
+3. Implement login method choice with QR login recommended first, Telegram app code fallback, and hidden 2FA password.
 4. Implement dialog listing with title, username, type, last message date, unread count, entity ID.
 5. Implement search/filter/custom entity selection.
 6. Add faked Telethon tests for sorting, filtering, session reuse, and auth branches.

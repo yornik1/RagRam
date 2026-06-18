@@ -41,13 +41,13 @@ ragram start --ui-port 8501
 
 1. Create the local app layout if missing.
 2. Load `~/.ragram/config.toml` if present.
-3. If Telegram config/session is missing:
-   - explain Telegram MTProto requirements: `api_id`, `api_hash`, and phone number;
+3. If Telegram API config/session is missing:
+   - explain Telegram MTProto requirements: `api_id` and `api_hash`;
    - ask for `api_id`;
    - ask for `api_hash` without echoing it;
-   - ask for phone number;
-   - run Telethon login;
-   - ask for login code when needed;
+   - if no session exists, offer login methods with QR first: `Login by QR code (recommended)` or `Login by Telegram app code`;
+   - for QR login, show an ASCII QR code and wait for scan from Telegram mobile/Desktop;
+   - for code login, ask for phone number and the short numeric Telegram app login code;
    - ask for 2FA password without echoing it when needed;
    - store config and reuse the Telethon session on later runs.
 4. List accessible Telegram channels/groups sorted by recent activity.

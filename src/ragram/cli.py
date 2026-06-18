@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import shutil
 import sys
 import uuid
@@ -25,9 +26,12 @@ from .telegram_client import (
     TelegramLoginCodeInvalid,
     TelegramLoginCodeRequestFailed,
     TelegramLoginCodeResendRequested,
+    TelegramQRLoginFailed,
+    TelegramQRLoginTimeout,
     TelegramDialog,
     create_telegram_client,
     ensure_telegram_login,
+    ensure_telegram_qr_login,
     filter_dialogs,
     list_accessible_dialogs,
     resolve_dialog_choice,
@@ -59,7 +63,7 @@ def _load_inquirer() -> Any:
 def _print_telegram_credentials_help() -> None:
     """Explain where users get Telegram MTProto app credentials."""
 
-    console.print("Telegram MTProto access needs api_id, api_hash, and phone number.")
+    console.print("Telegram MTProto access needs api_id and api_hash. Phone number is only needed for code login fallback.")
     console.print("Get api_id/api_hash here: https://my.telegram.org/apps")
     console.print(
         "Log in with your Telegram phone number, create an app if needed, then copy "
@@ -110,6 +114,10 @@ def _telegram_config_complete(config: Any) -> bool:
     return config.telegram.api_id is not None and bool(config.telegram.api_hash) and bool(config.telegram.phone)
 
 
+def _telegram_api_config_complete(config: Any) -> bool:
+    return config.telegram.api_id is not None and bool(config.telegram.api_hash)
+
+
 def _session_path_candidates(paths: Any, session_name: str) -> tuple[Any, Any]:
     session_path = paths.sessions_dir / session_name
     return session_path, session_path.with_suffix(".session")
@@ -138,6 +146,21 @@ def _normalize_login_code(value: str) -> str:
     return value.strip().replace(" ", "").replace("-", "")
 
 
+def _render_qr_ascii(url: str) -> str | None:
+    """Render a QR code as terminal-safe ASCII when qrcode is installed."""
+
+    try:
+        import qrcode
+    except ImportError:
+        return None
+    qr = qrcode.QRCode(border=1)
+    qr.add_data(url)
+    qr.make(fit=True)
+    output = io.StringIO()
+    qr.print_ascii(out=output, tty=False)
+    return output.getvalue()
+
+
 async def _disconnect_if_supported(client: Any) -> None:
     disconnect = getattr(client, "disconnect", None)
     if disconnect is None:
@@ -154,7 +177,7 @@ async def _run_interactive_start(config, paths) -> None:
     store = SQLiteStore(paths.sqlite_path)
     store.initialize()
 
-    if _telegram_config_complete(config) and (
+    if _telegram_api_config_complete(config) and (
         config.channel.entity_id is None or not _has_telegram_session(paths, config.telegram.session_name)
     ):
         console.print(f"Saved Telegram phone/config found: {config.telegram.phone}")
@@ -168,7 +191,7 @@ async def _run_interactive_start(config, paths) -> None:
             _reset_telegram_credentials(config, paths)
             save_config(config, paths.config_path)
 
-    if not _telegram_config_complete(config):
+    if not _telegram_api_config_complete(config):
         _print_telegram_credentials_help()
         while True:
             api_id = str(await _prompt_value(inquirer.text(message="Telegram api_id (digits only):"))).strip()
@@ -180,22 +203,36 @@ async def _run_interactive_start(config, paths) -> None:
             if api_hash:
                 break
             console.print("[red]api_hash cannot be empty. Copy App api_hash from https://my.telegram.org/apps.[/red]")
-        while True:
-            phone = str(
-                await _prompt_value(inquirer.text(message="Telegram phone number (international format, e.g. +15551234567):"))
-            ).strip()
-            if _valid_phone_number(phone):
-                break
-            console.print("[red]Phone must use international format: + followed by digits only, e.g. +15551234567.[/red]")
         config.telegram.api_id = int(api_id)
         config.telegram.api_hash = api_hash
-        config.telegram.phone = phone
         save_config(config, paths.config_path)
 
     client = create_telegram_client(config.telegram, paths)
     selected: TelegramDialog | None = None
     expected_code_length: int | None = None
     try:
+        login = None
+        login_method = "reused"
+        await client.connect()
+        if await client.is_user_authorized():
+            login = await ensure_telegram_login(
+                client,
+                phone=config.telegram.phone or "",
+                code_callback=lambda: "",
+                password_callback=lambda: "",
+            )
+        else:
+            login_method = await _prompt_value(
+                inquirer.select(
+                    message="Telegram login method:",
+                    choices=[
+                        {"name": "Login by QR code (recommended)", "value": "qr"},
+                        {"name": "Login by Telegram app code", "value": "code"},
+                    ],
+                    default="qr",
+                )
+            )
+
         async def ask_login_code() -> str:
             while True:
                 console.print(
@@ -237,6 +274,18 @@ async def _run_interactive_start(config, paths) -> None:
         async def ask_2fa_password() -> str:
             return str(await _prompt_value(inquirer.secret(message="Telegram 2FA password:")))
 
+        def show_qr_login(challenge) -> None:
+            console.print("Scan this QR from an already logged-in Telegram app:")
+            console.print("Telegram mobile: Settings → Devices → Link Desktop Device.")
+            rendered = _render_qr_ascii(challenge.url)
+            if rendered:
+                console.print(rendered)
+            else:
+                console.print(f"QR URL fallback: {challenge.url}")
+            if challenge.expires_at:
+                console.print(f"QR expires at: {challenge.expires_at}")
+            console.print("Waiting for QR scan...")
+
         def show_code_delivery(delivery) -> None:
             nonlocal expected_code_length
             expected_code_length = delivery.code_length
@@ -253,28 +302,58 @@ async def _run_interactive_start(config, paths) -> None:
             else:
                 console.print("Telegram did not advertise another delivery method yet; immediate resend may be refused.")
 
-        try:
-            login = await ensure_telegram_login(
-                client,
-                phone=config.telegram.phone or "",
-                code_callback=ask_login_code,
-                password_callback=ask_2fa_password,
-                code_sent_callback=show_code_delivery,
-                code_invalid_callback=lambda attempt, attempts: console.print(
-                    f"[red]Telegram rejected that code. Attempt {attempt}/{attempts}; check the newest {expected_code_length or ''}-digit Telegram login code.[/red]"
-                ),
-            )
-        except TelegramLoginCodeInvalid as exc:
-            console.print(f"[red]{exc}[/red]")
-            console.print("Tip: use the newest code from Telegram. If the phone/api_id/api_hash is wrong, run ragram restart --reconfigure or choose No when asked to use saved credentials.")
-            raise typer.Exit(1) from exc
-        except TelegramFloodWait as exc:
-            console.print(f"[red]Telegram is rate-limiting login-code requests. Wait {exc.seconds} seconds, then run ragram start again.[/red]")
-            raise typer.Exit(1) from exc
-        except TelegramLoginCodeRequestFailed as exc:
-            console.print(f"[red]{exc}[/red]")
-            console.print("Tip: wait a minute before resending. If this persists, quit with q, choose No for saved credentials, and re-check phone/api_id/api_hash.")
-            raise typer.Exit(1) from exc
+        if login_method == "qr":
+            try:
+                login = await ensure_telegram_qr_login(
+                    client,
+                    qr_callback=show_qr_login,
+                    password_callback=ask_2fa_password,
+                    timeout_seconds=180,
+                )
+            except TelegramQRLoginTimeout as exc:
+                console.print(f"[red]{exc}[/red]")
+                console.print("Tip: run ragram start again to generate a fresh QR code, or choose Telegram app code as fallback.")
+                raise typer.Exit(1) from exc
+            except TelegramQRLoginFailed as exc:
+                console.print(f"[red]{exc}[/red]")
+                console.print("Tip: run ragram start again and choose Telegram app code as fallback.")
+                raise typer.Exit(1) from exc
+        elif login_method == "code":
+            while not config.telegram.phone or not _valid_phone_number(config.telegram.phone):
+                phone = str(
+                    await _prompt_value(inquirer.text(message="Telegram phone number (international format, e.g. +15551234567):"))
+                ).strip()
+                if _valid_phone_number(phone):
+                    config.telegram.phone = phone
+                    save_config(config, paths.config_path)
+                    break
+                console.print("[red]Phone must use international format: + followed by digits only, e.g. +15551234567.[/red]")
+            try:
+                login = await ensure_telegram_login(
+                    client,
+                    phone=config.telegram.phone or "",
+                    code_callback=ask_login_code,
+                    password_callback=ask_2fa_password,
+                    code_sent_callback=show_code_delivery,
+                    code_invalid_callback=lambda attempt, attempts: console.print(
+                        f"[red]Telegram rejected that code. Attempt {attempt}/{attempts}; check the newest {expected_code_length or ''}-digit Telegram login code.[/red]"
+                    ),
+                )
+            except TelegramLoginCodeInvalid as exc:
+                console.print(f"[red]{exc}[/red]")
+                console.print("Tip: use the newest code from Telegram. If the phone/api_id/api_hash is wrong, run ragram restart --reconfigure or choose No when asked to use saved credentials.")
+                raise typer.Exit(1) from exc
+            except TelegramFloodWait as exc:
+                console.print(f"[red]Telegram is rate-limiting login-code requests. Wait {exc.seconds} seconds, then run ragram start again.[/red]")
+                raise typer.Exit(1) from exc
+            except TelegramLoginCodeRequestFailed as exc:
+                console.print(f"[red]{exc}[/red]")
+                console.print("Tip: wait a minute before resending. If this persists, quit with q, choose No for saved credentials, and re-check phone/api_id/api_hash.")
+                raise typer.Exit(1) from exc
+        else:
+            console.print("[red]Unknown Telegram login method selected.[/red]")
+            raise typer.Exit(1)
+        assert login is not None
         console.print("Telegram session reused." if login.reused_session else "Telegram session saved locally.")
 
         dialogs = await list_accessible_dialogs(client, limit=200)
