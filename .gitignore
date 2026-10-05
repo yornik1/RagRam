@@ -23,3 +23,36 @@ dist/
 *.session-journal
 
 .DS_Store
+
+# secrets and credentials
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+credentials*.json
+secrets.json
+secrets.y*ml
+# local data
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+*.db-wal
+*.db-shm
+# OS and local agent/IDE state
+.omc/
+.omx*
+.codex/
+.claude/
+.cursor/
+.agents/
+.idea/
+# project-specific
+chroma/
+*.npz
