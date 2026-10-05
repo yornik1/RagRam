@@ -21,3 +21,5 @@ dist/
 .ragram/
 *.session
 *.session-journal
+
+.DS_Store
